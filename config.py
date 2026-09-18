@@ -84,21 +84,21 @@ confirmer = {}
 
 
 START_IMG_URL = getenv(
-    "START_IMG_URL", "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/sunset_mountain.jpg"
+    "START_IMG_URL", "https://files.catbox.moe/rrl1y0.jpg"
 )
 PING_IMG_URL = getenv(
-    "PING_IMG_URL", "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/starry_night.jpg"
+    "PING_IMG_URL", "https://files.catbox.moe/rrl1y0.jpg"
 )
-PLAYLIST_IMG_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/starry_night.jpg"
-STATS_IMG_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/sunset_mountain.jpg"
-TELEGRAM_AUDIO_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/morning_sunrise.jpg"
-TELEGRAM_VIDEO_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/morning_sunrise.jpg"
-STREAM_IMG_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/morning_sunrise.jpg"
-SOUNCLOUD_IMG_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/music_forest.jpg"
-YOUTUBE_IMG_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/morning_sunrise.jpg"
-SPOTIFY_ARTIST_IMG_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/music_forest.jpg"
-SPOTIFY_ALBUM_IMG_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/music_forest.jpg"
-SPOTIFY_PLAYLIST_IMG_URL = "https://raw.githubusercontent.com/DevloperSP/MusicSp/main/.assets/music_forest.jpg"
+PLAYLIST_IMG_URL = "https://files.catbox.moe/kxykg5.png"
+STATS_IMG_URL = "https://files.catbox.moe/rrl1y0.jpg"
+TELEGRAM_AUDIO_URL = "https://files.catbox.moe/kxykg5.png"
+TELEGRAM_VIDEO_URL = "https://files.catbox.moe/kxykg5.png"
+STREAM_IMG_URL = "https://files.catbox.moe/kxykg5.png"
+SOUNCLOUD_IMG_URL = "https://files.catbox.moe/kxykg5.png"
+YOUTUBE_IMG_URL = "https://files.catbox.moe/kxykg5.png"
+SPOTIFY_ARTIST_IMG_URL = "https://files.catbox.moe/kxykg5.png"
+SPOTIFY_ALBUM_IMG_URL = "https://files.catbox.moe/kxykg5.png"
+SPOTIFY_PLAYLIST_IMG_URL = "https://files.catbox.moe/kxykg5.png"
 
 
 def time_to_seconds(time):
