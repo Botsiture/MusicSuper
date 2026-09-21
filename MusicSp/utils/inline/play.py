@@ -28,7 +28,7 @@ def track_markup(_, videoid, user_id, channel, fplay):
     return buttons
 
 
-def _progress_bar(played, dur, width=15):
+def _progress_bar(played, dur, width=12):
     try:
         played_sec = max(0, time_to_seconds(played))
         duration_sec = max(1, time_to_seconds(dur))
