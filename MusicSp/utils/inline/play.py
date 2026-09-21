@@ -38,7 +38,6 @@ def _progress_bar(played, dur, width=15):
     ratio = min(1.0, max(0.0, played_sec / duration_sec))
     pos = min(width - 1, int(round(ratio * (width - 1))))
 
-    # Heer image jaisa patla progress bar (─)
     return "─" * pos + "●" + "─" * (width - pos - 1)
 
 
@@ -54,7 +53,6 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
 
     rows = []
 
-    # Progress bar (Optional: Agar aap chahte hain ki buttons me bhi progress bar dikhe)
     bar = _progress_bar(played, dur) if played is not None and dur else None
 
     if bar:
@@ -67,7 +65,6 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
             ]
         )
 
-    # Main player controls
     rows.append(
         [
             InlineKeyboardButton(
@@ -85,7 +82,6 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
         ]
     )
 
-    # Queue button
     queue_count = max(0, len(current) - 1)
     videoid = current[0].get("vidid", "") if current else ""
 
@@ -136,8 +132,8 @@ async def refresh_player_markup(_, chat_id, playing=True):
             playing=playing,
         )
 
-        # Note: Rich message ke liye edit_reply_markup kaam nahi karta,
-        # isliye hum standard inline buttons use kar rahe hain.
+        # Note: Rich message ke liye edit_reply_markup kaam nahi karta.
+        # Isliye hum standard inline buttons use kar rahe hain.
         await mystic.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup(buttons)
         )
