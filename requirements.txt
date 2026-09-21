@@ -21,7 +21,7 @@ requests
 heroku3
 
 # --- Telegram & Media libs ---
-kurigram>=2.2.25
+kurigram>=2.2.26
 py-tgcalls==0.9.7; python_version < "3.12"
 ntgcalls==1.0.4
 spotipy
