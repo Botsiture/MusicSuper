@@ -136,6 +136,8 @@ async def refresh_player_markup(_, chat_id, playing=True):
             playing=playing,
         )
 
+        # Note: Rich message ke liye edit_reply_markup kaam nahi karta,
+        # isliye hum standard inline buttons use kar rahe hain.
         await mystic.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup(buttons)
         )
