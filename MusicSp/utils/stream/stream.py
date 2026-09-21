@@ -104,7 +104,7 @@ async def stream(
                 img = await gen_thumb(vidid)
                 button = stream_markup(_, chat_id)
                 caption = _["stream_1"].format(
-                    f"[https://t.me/](https://t.me/){app.username}?start=info_{vidid}",
+                    f"https://t.me/{app.username}?start=info_{vidid}",
                     title[:23],
                     duration_min,
                     user_name,
@@ -114,6 +114,7 @@ async def stream(
                     photo=img,
                     caption=caption,
                     reply_markup=InlineKeyboardMarkup(button),
+                    has_spoiler=True
                 )
                 db[chat_id][0]["mystic"] = run
                 db[chat_id][0]["markup"] = "stream"
@@ -133,6 +134,7 @@ async def stream(
                 photo=carbon,
                 caption=_["play_21"].format(position, link),
                 reply_markup=upl,
+                has_spoiler=True
             )
 
     elif streamtype == "youtube":
@@ -200,7 +202,7 @@ async def stream(
             img = await gen_thumb(vidid)
             button = stream_markup(_, chat_id)
             caption = _["stream_1"].format(
-                f"[https://t.me/](https://t.me/){app.username}?start=info_{vidid}",
+                f"https://t.me/{app.username}?start=info_{vidid}",
                 title[:23],
                 duration_min,
                 user_name,
@@ -210,6 +212,7 @@ async def stream(
                 photo=img,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
+                has_spoiler=True
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "stream"
@@ -263,6 +266,7 @@ async def stream(
                 photo=config.SOUNCLOUD_IMG_URL,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
+                has_spoiler=True
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
@@ -319,6 +323,7 @@ async def stream(
                 photo=photo,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
+                has_spoiler=True
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
@@ -378,7 +383,7 @@ async def stream(
             img = await gen_thumb(vidid)
             button = stream_markup(_, chat_id)
             caption = _["stream_1"].format(
-                f"[https://t.me/](https://t.me/){app.username}?start=info_{vidid}",
+                f"https://t.me/{app.username}?start=info_{vidid}",
                 title[:23],
                 duration_min,
                 user_name,
@@ -388,6 +393,7 @@ async def stream(
                 photo=img,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
+                has_spoiler=True
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
@@ -441,6 +447,7 @@ async def stream(
                 photo=config.STREAM_IMG_URL,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
+                has_spoiler=True
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
