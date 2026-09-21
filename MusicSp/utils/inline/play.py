@@ -51,7 +51,8 @@ def _progress_bar(played, dur, width=15):
     ratio = min(1.0, max(0.0, played_sec / duration_sec))
     pos = min(width - 1, int(round(ratio * (width - 1))))
 
-    return "━" * pos + "●" + "━" * (width - pos - 1)
+    # Heer image jaisa patla progress bar (─)
+    return "─" * pos + "●" + "─" * (width - pos - 1)
 
 
 def _player_markup(_, chat_id, playing=True, played=None, dur=None):
