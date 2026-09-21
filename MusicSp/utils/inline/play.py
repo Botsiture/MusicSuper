@@ -66,7 +66,7 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
 
     rows = []
 
-    # Progress bar (No extra buttons in this row, just text callback to match image perfectly)
+    # Progress bar (No extra buttons in this row)
     bar = _progress_bar(played, dur) if played is not None and dur else None
 
     if bar:
@@ -74,8 +74,8 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
             [
                 InlineKeyboardButton(
                     text=f"{played}  {bar}  {dur}",
-                    callback_data="GetTimer",
-                    style=ButtonStyle.SECONDARY,
+                    callback_data="GetTimer"
+                    # Yahan se style=ButtonStyle.SECONDARY hata diya gaya hai taaki crash na ho
                 )
             ]
         )
