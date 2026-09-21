@@ -21,14 +21,19 @@ from MusicSp.utils.thumbnails import gen_thumb
 async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, button):
     """
     Rich message bhejne ke liye helper.
-    Yahan reply_markup NAHI dena hai, warna Telegram purane buttons dikha dega.
     """
     try:
-        # 1. Photo ko temporarily upload karein (utils.get_input_photo hata diya gaya hai)
-        temp_msg = await app.send_photo(chat_id=chat_id, photo=photo)
-        photo_file_id = temp_msg.photo.file_id
+        # 1. Photo ko silently upload karein (chat mein message nahi jayega, double thumbnail fix)
+        uploaded_file = await app.save_file(file=photo)
         
-        # 2. Standard inline buttons ko PageBlockButtonRow mein convert karein
+        # 2. InputPhoto object banayein
+        input_photo = raw_types.InputPhoto(
+            id=uploaded_file.file_id,
+            access_hash=uploaded_file.access_hash,
+            file_reference=uploaded_file.file_reference
+        )
+
+        # 3. Standard inline buttons ko PageBlockButtonRow mein convert karein
         button_rows = []
         for row in button:
             page_buttons = []
@@ -57,29 +62,31 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
                     )
                 )
 
-        # 3. Rich blocks banayein (Photo + Caption + Progress Bar + Buttons)
-        # Note: PageBlockPhoto mein sirf file_id pass karna hai
+        # 4. Rich blocks banayein (Photo + Caption + Progress Bar + Buttons)
+        # 🔥 FIX 1: TextRich ki jagah TextPlain use karein
+        # 🔥 FIX 2: photo_id mein input_photo (ya uski id) pass karein
         rich_blocks = [
             raw_types.PageBlockPhoto(
-                photo_id=photo_file_id,
+                photo_id=input_photo.id,
                 caption=raw_types.PageCaption(
-                    text=raw_types.TextRich(text=caption)
+                    text=raw_types.TextPlain(text=caption) 
                 )
             ),
             raw_types.PageBlockProgressBar(
-                progress=0,  # 0 se 100 tak (dynamic karne ke liye play.py mein edit_rich_message use karein)
+                progress=0,
                 text=raw_types.TextPlain(text=f"00:00 / {duration_min}")
             )
         ]
         rich_blocks.extend(button_rows)
 
-        # 4. Rich message bhejein (reply_markup bilkul nahi dena)
-        # Temporary photo ko delete karein taaki chat mein 2 photo na dikhein
-        await temp_msg.delete()
-        
+        # 5. Rich message bhejein (reply_markup bilkul nahi dena)
+        # 🔥 FIX 3: InputRichMessage mein photos list pass karna zaroori hai
         return await app.send_rich_message(
             chat_id=chat_id,
-            rich_message=InputRichMessage(blocks=rich_blocks)
+            rich_message=InputRichMessage(
+                blocks=rich_blocks,
+                photos=[input_photo]
+            )
         )
     except Exception as e:
         # 🔥 Error print karein taaki Heroku logs mein asli dikkat dikhe
