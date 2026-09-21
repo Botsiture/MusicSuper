@@ -71,7 +71,7 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
                 callback_data=f"ADMIN Replay|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="Ⅱ Pause" if playing else "▶ Resume",
+                text="Ⅱ Pause" if playing else "Resume",
                 callback_data=f"ADMIN {'Pause' if playing else 'Resume'}|{chat_id}",
             ),
             InlineKeyboardButton(
