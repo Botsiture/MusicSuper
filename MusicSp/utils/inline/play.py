@@ -1,6 +1,6 @@
-import math
-
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.raw import types as raw_types
+from pyrogram.types import InputRichMessage
 
 from MusicSp.misc import db
 from MusicSp.utils.formatters import time_to_seconds, seconds_to_min
@@ -115,6 +115,38 @@ def stream_markup(_, chat_id, playing=True):
     )
 
 
+def _convert_to_rich_buttons(buttons):
+    """Standard InlineKeyboardButton ko PageBlockButtonRow mein convert karta hai."""
+    button_rows = []
+    for row in buttons:
+        page_buttons = []
+        for btn in row:
+            if btn.callback_data:
+                btn_type = raw_types.InlineButtonTypeCallback(
+                    data=btn.callback_data.encode()
+                )
+            elif btn.url:
+                btn_type = raw_types.InlineButtonTypeUrl(url=btn.url)
+            else:
+                continue
+
+            page_buttons.append(
+                raw_types.PageButton(
+                    text=raw_types.TextPlain(text=btn.text),
+                    type=btn_type,
+                    style=raw_types.RichButtonStyle(bg_primary=True)
+                )
+            )
+        if page_buttons:
+            button_rows.append(
+                raw_types.PageBlockButtonRow(
+                    buttons=page_buttons,
+                    align_center=True
+                )
+            )
+    return button_rows
+
+
 async def refresh_player_markup(_, chat_id, playing=True):
     current = db.get(chat_id) or []
 
@@ -132,13 +164,39 @@ async def refresh_player_markup(_, chat_id, playing=True):
             playing=playing,
         )
 
-        # Note: Rich message ke liye edit_reply_markup kaam nahi karta.
-        # Isliye hum standard inline buttons use kar rahe hain.
+        # 1. Rich message ke liye try karo
+        try:
+            rich_button_rows = _convert_to_rich_buttons(buttons)
+            
+            # Note: Yahan hum sirf buttons aur progress bar update kar rahe hain.
+            # Photo aur Caption waisi hi rahegi (agar aapne stream.py mein unhe save kiya hai).
+            # Agar aapko photo/caption bhi update karni hai, toh unhe db se nikalna padega.
+            new_blocks = []
+            # Progress bar block (agar aap chahte hain ki rich message mein progress bar update ho)
+            # new_blocks.append(
+            #     raw_types.PageBlockProgressBar(
+            #         progress=0,
+            #         text=raw_types.TextPlain(text="00:00 / 00:00")
+            #     )
+            # )
+            new_blocks.extend(rich_button_rows)
+
+            await mystic.edit_rich_message(
+                rich_message=InputRichMessage(blocks=new_blocks)
+            )
+            return  # Agar rich message update ho gaya, toh yahin ruk jao
+
+        except Exception as rich_err:
+            # Agar rich message update fail hota hai, toh fallback (standard buttons)
+            print(f"Rich edit failed, falling back to standard: {rich_err}")
+
+        # 2. Fallback: Standard buttons update karo
         await mystic.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup(buttons)
         )
-    except Exception:
-        pass
+
+    except Exception as e:
+        print(f"refresh_player_markup error: {e}")
 
 
 def playlist_markup(_, videoid, user_id, ptype, channel, fplay):
@@ -191,7 +249,7 @@ def slider_markup(_, videoid, user_id, query, query_type, channel, fplay):
             ),
             InlineKeyboardButton(
                 text=_["P_B_2"],
-                callback_data=f"MusicStream {videoid}|{user_id}|v|{channel}|{fplay}",
+                callback_data=f"MusicStream {vidid}|{user_id}|v|{channel}|{fplay}",
             ),
         ],
         [
