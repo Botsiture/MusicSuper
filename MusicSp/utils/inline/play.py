@@ -157,6 +157,11 @@ async def refresh_player_markup(_, chat_id, playing=True):
     if not mystic:
         return
 
+    # Progress bar ke liye current track ka data nikalo
+    track = current[0]
+    played = seconds_to_min(track.get("played", 0))
+    dur = track.get("dur", "00:00")
+
     try:
         buttons = stream_markup(
             _,
@@ -168,17 +173,37 @@ async def refresh_player_markup(_, chat_id, playing=True):
         try:
             rich_button_rows = _convert_to_rich_buttons(buttons)
             
-            # Note: Yahan hum sirf buttons aur progress bar update kar rahe hain.
-            # Photo aur Caption waisi hi rahegi (agar aapne stream.py mein unhe save kiya hai).
-            # Agar aapko photo/caption bhi update karni hai, toh unhe db se nikalna padega.
+            # 🔥 Photo aur Caption db se nikalo (stream.py mein save kiye gaye hain)
+            saved_photo = track.get("photo")
+            saved_caption = track.get("caption")
+            
             new_blocks = []
-            # Progress bar block (agar aap chahte hain ki rich message mein progress bar update ho)
-            # new_blocks.append(
-            #     raw_types.PageBlockProgressBar(
-            #         progress=0,
-            #         text=raw_types.TextPlain(text="00:00 / 00:00")
-            #     )
-            # )
+            
+            # Agar photo aur caption saved hain, toh poora structure wapas banao
+            if saved_photo and saved_caption:
+                # Photo ko upload karo (kyunki edit ke liye file_id chahiye)
+                temp_msg = await mystic.client.send_photo(chat_id=mystic.chat.id, photo=saved_photo)
+                photo_file_id = temp_msg.photo.file_id
+                await temp_msg.delete()
+                
+                new_blocks.append(
+                    raw_types.PageBlockPhoto(
+                        photo_id=photo_file_id,
+                        caption=raw_types.PageCaption(
+                            text=raw_types.TextRich(text=saved_caption)
+                        )
+                    )
+                )
+            
+            # Progress bar block
+            new_blocks.append(
+                raw_types.PageBlockProgressBar(
+                    progress=0, # 0 to 100 (Agar aapko dynamic chahiye toh yahan calculation daalein)
+                    text=raw_types.TextPlain(text=f"{played} / {dur}")
+                )
+            )
+            
+            # Buttons add karo
             new_blocks.extend(rich_button_rows)
 
             await mystic.edit_rich_message(
@@ -249,7 +274,7 @@ def slider_markup(_, videoid, user_id, query, query_type, channel, fplay):
             ),
             InlineKeyboardButton(
                 text=_["P_B_2"],
-                callback_data=f"MusicStream {vidid}|{user_id}|v|{channel}|{fplay}",
+                callback_data=f"MusicStream {videoid}|{user_id}|v|{channel}|{fplay}",
             ),
         ],
         [
