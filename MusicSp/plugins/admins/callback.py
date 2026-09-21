@@ -19,7 +19,12 @@ from MusicSp.utils.database import (
 )
 from MusicSp.utils.decorators.language import languageCB
 from MusicSp.utils.formatters import seconds_to_min
-from MusicSp.utils.inline import close_markup, stream_markup, stream_markup_timer
+from MusicSp.utils.inline import (
+    close_markup,
+    refresh_player_markup,
+    stream_markup,
+    stream_markup_timer,
+)
 from MusicSp.utils.stream.autoclear import auto_clean
 from MusicSp.utils.thumbnails import gen_thumb
 from config import (
@@ -137,6 +142,7 @@ async def del_back_playlist(client, CallbackQuery, _):
         await CallbackQuery.answer()
         await music_off(chat_id)
         await DevSp.pause_stream(chat_id)
+        await refresh_player_markup(_, chat_id, playing=False)
         await CallbackQuery.message.reply_text(
             _["admin_2"].format(mention), reply_markup=close_markup(_)
         )
@@ -146,6 +152,7 @@ async def del_back_playlist(client, CallbackQuery, _):
         await CallbackQuery.answer()
         await music_on(chat_id)
         await DevSp.resume_stream(chat_id)
+        await refresh_player_markup(_, chat_id, playing=True)
         await CallbackQuery.message.reply_text(
             _["admin_4"].format(mention), reply_markup=close_markup(_)
         )
