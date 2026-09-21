@@ -20,21 +20,20 @@ from MusicSp.utils.thumbnails import gen_thumb
 
 async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, button):
     """
-    Helper function to send a rich message with photo, caption, progress bar, and buttons.
-    Note: Yeh feature sirf Telegram Business Bots ke liye kaam karta hai.
+    Rich message bhejne ke liye helper.
+    Yahan reply_markup NAHI dena hai, warna Telegram purane buttons dikha dega.
     """
     try:
-        # 1. Photo upload temporarily to get InputPhoto object
+        # 1. Photo ko temporarily upload karke InputPhoto object nikalein
         temp_msg = await app.send_photo(chat_id=chat_id, photo=photo)
         input_photo = utils.get_input_photo(temp_msg.photo)
         await temp_msg.delete()
 
-        # 2. Convert standard inline buttons to PageBlockButtonRow
+        # 2. Standard inline buttons ko PageBlockButtonRow mein convert karein
         button_rows = []
         for row in button:
             page_buttons = []
             for btn in row:
-                # Determine button type (Callback or URL)
                 if btn.callback_data:
                     btn_type = raw_types.InlineButtonTypeCallback(
                         data=btn.callback_data.encode()
@@ -59,7 +58,7 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
                     )
                 )
 
-        # 3. Create rich message blocks (Photo + Caption + Progress + Buttons)
+        # 3. Rich blocks banayein (Photo + Caption + Progress Bar + Buttons)
         rich_blocks = [
             raw_types.PageBlockPhoto(
                 photo_id=input_photo,
@@ -68,20 +67,20 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
                 )
             ),
             raw_types.PageBlockProgressBar(
-                progress=0,  # 0 to 100
+                progress=0,  # 0 se 100 tak (dynamic karne ke liye neeche dekhein)
                 text=raw_types.TextPlain(text=f"00:00 / {duration_min}")
             )
         ]
         rich_blocks.extend(button_rows)
 
-        # 4. Send rich message (Note: reply_markup NAHI dena hai)
+        # 4. Rich message bhejein (reply_markup bilkul nahi dena)
         return await app.send_rich_message(
             chat_id=chat_id,
             rich_message=InputRichMessage(blocks=rich_blocks)
         )
     except Exception as e:
-        # Fallback to normal photo if rich message fails
-        print(f"Rich message failed, falling back to normal photo: {e}")
+        print(f"Rich message failed: {e}")
+        # Fallback: agar rich message fail ho to normal photo bhej dein
         return await app.send_photo(
             chat_id=chat_id,
             photo=photo,
