@@ -21,9 +21,10 @@ from MusicSp.utils.thumbnails import gen_thumb
 async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, button):
     """
     Helper function to send a rich message with photo, caption, progress bar, and buttons.
+    Note: Yeh feature sirf Telegram Business Bots ke liye kaam karta hai.
     """
     try:
-        # 1. Upload photo temporarily to get InputPhoto object
+        # 1. Photo upload temporarily to get InputPhoto object
         temp_msg = await app.send_photo(chat_id=chat_id, photo=photo)
         input_photo = utils.get_input_photo(temp_msg.photo)
         await temp_msg.delete()
