@@ -23,17 +23,21 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
     Rich message bhejne ke liye helper.
     """
     try:
-        # 1. Photo ko silently upload karein (chat mein message nahi jayega, double thumbnail fix)
-        uploaded_file = await app.save_file(file=photo)
-        
-        # 2. InputPhoto object banayein
+        # 1. Photo ko temporarily bhejein taaki InputPhoto ke liye zaroori details mil sakein
+        temp_msg = await app.send_photo(chat_id=chat_id, photo=photo)
+        photo_obj = temp_msg.photo
+
+        # 2. Sahi InputPhoto object banayein (save_file ke bajaye)
         input_photo = raw_types.InputPhoto(
-            id=uploaded_file.file_id,
-            access_hash=uploaded_file.access_hash,
-            file_reference=uploaded_file.file_reference
+            id=photo_obj.file_id,
+            access_hash=photo_obj.access_hash,
+            file_reference=photo_obj.file_reference
         )
 
-        # 3. Standard inline buttons ko PageBlockButtonRow mein convert karein
+        # 3. Temporary photo ko turant delete karein taaki chat mein double thumbnail na dikhe
+        await temp_msg.delete()
+
+        # 4. Standard inline buttons ko PageBlockButtonRow mein convert karein
         button_rows = []
         for row in button:
             page_buttons = []
@@ -62,14 +66,13 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
                     )
                 )
 
-        # 4. Rich blocks banayein (Photo + Caption + Progress Bar + Buttons)
-        # 🔥 FIX 1: TextRich ki jagah TextPlain use karein
-        # 🔥 FIX 2: photo_id mein input_photo (ya uski id) pass karein
+        # 5. Rich blocks banayein (Photo + Caption + Progress Bar + Buttons)
+        # 🔥 FIX: TextRich ki jagah TextPlain use karein
         rich_blocks = [
             raw_types.PageBlockPhoto(
                 photo_id=input_photo.id,
                 caption=raw_types.PageCaption(
-                    text=raw_types.TextPlain(text=caption) 
+                    text=raw_types.TextPlain(text=caption)
                 )
             ),
             raw_types.PageBlockProgressBar(
@@ -79,8 +82,7 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
         ]
         rich_blocks.extend(button_rows)
 
-        # 5. Rich message bhejein (reply_markup bilkul nahi dena)
-        # 🔥 FIX 3: InputRichMessage mein photos list pass karna zaroori hai
+        # 6. Rich message bhejein (photos list pass karna zaroori hai)
         return await app.send_rich_message(
             chat_id=chat_id,
             rich_message=InputRichMessage(
@@ -92,7 +94,7 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
         # 🔥 Error print karein taaki Heroku logs mein asli dikkat dikhe
         print(f"❌ RICH MESSAGE FAILED: {e}")
         traceback.print_exc()
-        
+
         # Fallback: agar rich message fail ho to normal photo bhej dein
         return await app.send_photo(
             chat_id=chat_id,
@@ -197,7 +199,6 @@ async def stream(
                 run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
                 db[chat_id][0]["mystic"] = run
                 db[chat_id][0]["markup"] = "stream"
-                # 🔥 Save photo and caption for later updates
                 db[chat_id][0]["photo"] = img
                 db[chat_id][0]["caption"] = caption
         if count == 0:
