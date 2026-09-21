@@ -3,8 +3,8 @@ import traceback
 from random import randint
 from typing import Union
 
-from pyrogram.raw import types as raw_types
-from pyrogram.types import InlineKeyboardMarkup, InputRichMessage
+from pyrogram import types
+from pyrogram.types import InlineKeyboardMarkup
 
 import config
 from MusicSp import Carbon, YouTube, app
@@ -13,6 +13,7 @@ from MusicSp.misc import db
 from MusicSp.utils.database import add_active_video_chat, is_active_chat
 from MusicSp.utils.exceptions import AssistantErr
 from MusicSp.utils.inline import aq_markup, close_markup, stream_markup
+from MusicSp.utils.inline.play import _convert_to_rich_buttons
 from MusicSp.utils.pastebin import DevSpBin
 from MusicSp.utils.stream.queue import put_queue, put_queue_index
 from MusicSp.utils.thumbnails import gen_thumb
@@ -20,82 +21,32 @@ from MusicSp.utils.thumbnails import gen_thumb
 
 async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, button):
     """
-    Rich message bhejne ke liye helper.
+    Native Rich Message system ka helper without unnecessary upload/delete.
     """
     try:
-        # 1. Photo ko temporarily bhejein taaki InputPhoto ke liye zaroori details mil sakein
-        temp_msg = await app.send_photo(chat_id=chat_id, photo=photo)
-        photo_obj = temp_msg.photo
+        rich_button_rows = _convert_to_rich_buttons(button)
 
-        # 2. Sahi InputPhoto object banayein (save_file ke bajaye)
-        input_photo = raw_types.InputPhoto(
-            id=photo_obj.file_id,
-            access_hash=photo_obj.access_hash,
-            file_reference=photo_obj.file_reference
-        )
-
-        # 3. Temporary photo ko turant delete karein taaki chat mein double thumbnail na dikhe
-        await temp_msg.delete()
-
-        # 4. Standard inline buttons ko PageBlockButtonRow mein convert karein
-        button_rows = []
-        for row in button:
-            page_buttons = []
-            for btn in row:
-                if btn.callback_data:
-                    btn_type = raw_types.InlineButtonTypeCallback(
-                        data=btn.callback_data.encode()
-                    )
-                elif btn.url:
-                    btn_type = raw_types.InlineButtonTypeUrl(url=btn.url)
-                else:
-                    continue
-
-                page_buttons.append(
-                    raw_types.PageButton(
-                        text=raw_types.TextPlain(text=btn.text),
-                        type=btn_type,
-                        style=raw_types.RichButtonStyle(bg_primary=True)
-                    )
-                )
-            if page_buttons:
-                button_rows.append(
-                    raw_types.PageBlockButtonRow(
-                        buttons=page_buttons,
-                        align_center=True
-                    )
-                )
-
-        # 5. Rich blocks banayein (Photo + Caption + Progress Bar + Buttons)
-        # 🔥 FIX: TextRich ki jagah TextPlain use karein
         rich_blocks = [
-            raw_types.PageBlockPhoto(
-                photo_id=input_photo.id,
-                caption=raw_types.PageCaption(
-                    text=raw_types.TextPlain(text=caption)
-                )
+            types.InputRichBlockPhoto(
+                photo=photo,  # Direct local path ya URL
+                caption=types.RichTextPlain(text=caption)
             ),
-            raw_types.PageBlockProgressBar(
+            types.InputRichBlockProgressBar(
                 progress=0,
-                text=raw_types.TextPlain(text=f"00:00 / {duration_min}")
+                text=types.RichTextPlain(text=f"00:00  ─────●────  {duration_min}")
             )
         ]
-        rich_blocks.extend(button_rows)
+        rich_blocks.extend(rich_button_rows)
 
-        # 6. Rich message bhejein (photos list pass karna zaroori hai)
+        # Directly send the unified block array
         return await app.send_rich_message(
             chat_id=chat_id,
-            rich_message=InputRichMessage(
-                blocks=rich_blocks,
-                photos=[input_photo]
-            )
+            rich_message=types.InputRichMessage(blocks=rich_blocks)
         )
     except Exception as e:
-        # 🔥 Error print karein taaki Heroku logs mein asli dikkat dikhe
         print(f"❌ RICH MESSAGE FAILED: {e}")
         traceback.print_exc()
-
-        # Fallback: agar rich message fail ho to normal photo bhej dein
+        # Fallback to standard message
         return await app.send_photo(
             chat_id=chat_id,
             photo=photo,
@@ -121,6 +72,7 @@ async def stream(
         return
     if forceplay:
         await DevSp.force_stop_stream(chat_id)
+        
     if streamtype == "playlist":
         msg = f"{_['play_19']}\n\n"
         count = 0
@@ -218,6 +170,7 @@ async def stream(
                 caption=_["play_21"].format(position, link),
                 reply_markup=upl,
             )
+
     elif streamtype == "youtube":
         link = result["link"]
         vidid = result["vidid"]
@@ -225,12 +178,11 @@ async def stream(
         duration_min = result["duration_min"]
         thumbnail = result["thumb"]
         status = True if video else None
-    
-        current_queue = db.get(chat_id)
 
+        current_queue = db.get(chat_id)
         if current_queue is not None and len(current_queue) >= 10:
             return await app.send_message(original_chat_id, "You can't add more than 10 songs to the queue.")
-
+            
         try:
             file_path, direct = await YouTube.download(
                 vidid, mystic, videoid=True, video=status
@@ -239,7 +191,7 @@ async def stream(
             raise AssistantErr(_["play_14"])
         if not file_path:
             raise AssistantErr(_["play_14"])
-
+            
         if await is_active_chat(chat_id):
             await put_queue(
                 chat_id,
@@ -294,10 +246,12 @@ async def stream(
             db[chat_id][0]["markup"] = "stream"
             db[chat_id][0]["photo"] = img
             db[chat_id][0]["caption"] = caption
+
     elif streamtype == "soundcloud":
         file_path = result["filepath"]
         title = result["title"]
         duration_min = result["duration_min"]
+        
         if await is_active_chat(chat_id):
             await put_queue(
                 chat_id,
@@ -342,12 +296,14 @@ async def stream(
             db[chat_id][0]["markup"] = "tg"
             db[chat_id][0]["photo"] = config.SOUNCLOUD_IMG_URL
             db[chat_id][0]["caption"] = caption
+
     elif streamtype == "telegram":
         file_path = result["path"]
         link = result["link"]
         title = (result["title"]).title()
         duration_min = result["dur"]
         status = True if video else None
+        
         if await is_active_chat(chat_id):
             await put_queue(
                 chat_id,
@@ -393,6 +349,7 @@ async def stream(
             db[chat_id][0]["markup"] = "tg"
             db[chat_id][0]["photo"] = photo
             db[chat_id][0]["caption"] = caption
+
     elif streamtype == "live":
         link = result["link"]
         vidid = result["vidid"]
@@ -400,6 +357,7 @@ async def stream(
         thumbnail = result["thumb"]
         duration_min = "Live Track"
         status = True if video else None
+        
         if await is_active_chat(chat_id):
             await put_queue(
                 chat_id,
@@ -457,10 +415,12 @@ async def stream(
             db[chat_id][0]["markup"] = "tg"
             db[chat_id][0]["photo"] = img
             db[chat_id][0]["caption"] = caption
+
     elif streamtype == "index":
         link = result
         title = "ɪɴᴅᴇx ᴏʀ ᴍ3ᴜ8 ʟɪɴᴋ"
         duration_min = "00:00"
+        
         if await is_active_chat(chat_id):
             await put_queue_index(
                 chat_id,
