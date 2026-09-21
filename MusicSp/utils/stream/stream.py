@@ -1,4 +1,5 @@
 import os
+import traceback
 from random import randint
 from typing import Union
 
@@ -67,7 +68,7 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
                 )
             ),
             raw_types.PageBlockProgressBar(
-                progress=0,  # 0 se 100 tak (dynamic karne ke liye neeche dekhein)
+                progress=0,  # 0 se 100 tak
                 text=raw_types.TextPlain(text=f"00:00 / {duration_min}")
             )
         ]
@@ -79,7 +80,10 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
             rich_message=InputRichMessage(blocks=rich_blocks)
         )
     except Exception as e:
-        print(f"Rich message failed: {e}")
+        # 🔥 Yahan error print karo taaki Heroku logs mein asli dikkat dikhe
+        print(f"❌ RICH MESSAGE FAILED: {e}")
+        traceback.print_exc()
+        
         # Fallback: agar rich message fail ho to normal photo bhej dein
         return await app.send_photo(
             chat_id=chat_id,
@@ -184,6 +188,9 @@ async def stream(
                 run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
                 db[chat_id][0]["mystic"] = run
                 db[chat_id][0]["markup"] = "stream"
+                # 🔥 Save photo and caption for later updates
+                db[chat_id][0]["photo"] = img
+                db[chat_id][0]["caption"] = caption
         if count == 0:
             return
         else:
@@ -275,6 +282,8 @@ async def stream(
             run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "stream"
+            db[chat_id][0]["photo"] = img
+            db[chat_id][0]["caption"] = caption
     elif streamtype == "soundcloud":
         file_path = result["filepath"]
         title = result["title"]
@@ -321,6 +330,8 @@ async def stream(
             run = await _send_rich_stream_msg(app, original_chat_id, config.SOUNCLOUD_IMG_URL, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
+            db[chat_id][0]["photo"] = config.SOUNCLOUD_IMG_URL
+            db[chat_id][0]["caption"] = caption
     elif streamtype == "telegram":
         file_path = result["path"]
         link = result["link"]
@@ -370,6 +381,8 @@ async def stream(
             run = await _send_rich_stream_msg(app, original_chat_id, photo, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
+            db[chat_id][0]["photo"] = photo
+            db[chat_id][0]["caption"] = caption
     elif streamtype == "live":
         link = result["link"]
         vidid = result["vidid"]
@@ -432,6 +445,8 @@ async def stream(
             run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
+            db[chat_id][0]["photo"] = img
+            db[chat_id][0]["caption"] = caption
     elif streamtype == "index":
         link = result
         title = "ɪɴᴅᴇx ᴏʀ ᴍ3ᴜ8 ʟɪɴᴋ"
@@ -478,4 +493,6 @@ async def stream(
             run = await _send_rich_stream_msg(app, original_chat_id, config.STREAM_IMG_URL, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
+            db[chat_id][0]["photo"] = config.STREAM_IMG_URL
+            db[chat_id][0]["caption"] = caption
             await mystic.delete()
