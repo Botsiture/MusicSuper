@@ -28,7 +28,37 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
         input_photo = utils.get_input_photo(temp_msg.photo)
         await temp_msg.delete()
 
-        # 2. Create rich message blocks
+        # 2. Convert standard inline buttons to PageBlockButtonRow
+        button_rows = []
+        for row in button:
+            page_buttons = []
+            for btn in row:
+                # Determine button type (Callback or URL)
+                if btn.callback_data:
+                    btn_type = raw_types.InlineButtonTypeCallback(
+                        data=btn.callback_data.encode()
+                    )
+                elif btn.url:
+                    btn_type = raw_types.InlineButtonTypeUrl(url=btn.url)
+                else:
+                    continue
+
+                page_buttons.append(
+                    raw_types.PageButton(
+                        text=raw_types.TextPlain(text=btn.text),
+                        type=btn_type,
+                        style=raw_types.RichButtonStyle(bg_primary=True)
+                    )
+                )
+            if page_buttons:
+                button_rows.append(
+                    raw_types.PageBlockButtonRow(
+                        buttons=page_buttons,
+                        align_center=True
+                    )
+                )
+
+        # 3. Create rich message blocks (Photo + Caption + Progress + Buttons)
         rich_blocks = [
             raw_types.PageBlockPhoto(
                 photo_id=input_photo,
@@ -41,12 +71,12 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
                 text=raw_types.TextPlain(text=f"00:00 / {duration_min}")
             )
         ]
+        rich_blocks.extend(button_rows)
 
-        # 3. Send rich message
+        # 4. Send rich message (Note: reply_markup NAHI dena hai)
         return await app.send_rich_message(
             chat_id=chat_id,
-            rich_message=InputRichMessage(blocks=rich_blocks),
-            reply_markup=InlineKeyboardMarkup(button)
+            rich_message=InputRichMessage(blocks=rich_blocks)
         )
     except Exception as e:
         # Fallback to normal photo if rich message fails
