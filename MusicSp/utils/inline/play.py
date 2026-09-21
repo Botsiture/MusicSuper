@@ -1,15 +1,5 @@
 import math
 
-try:
-    from pyrogram.enums import ButtonStyle
-except ImportError:
-    class ButtonStyle:
-        PRIMARY = None
-        SECONDARY = None
-        SUCCESS = None
-        DANGER = None
-        DEFAULT = None
-
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from MusicSp.misc import db
@@ -22,19 +12,16 @@ def track_markup(_, videoid, user_id, channel, fplay):
             InlineKeyboardButton(
                 text=_["P_B_1"],
                 callback_data=f"MusicStream {videoid}|{user_id}|a|{channel}|{fplay}",
-                style=ButtonStyle.PRIMARY,
             ),
             InlineKeyboardButton(
                 text=_["P_B_2"],
                 callback_data=f"MusicStream {videoid}|{user_id}|v|{channel}|{fplay}",
-                style=ButtonStyle.SUCCESS,
             ),
         ],
         [
             InlineKeyboardButton(
                 text=_["CLOSE_BUTTON"],
                 callback_data=f"forceclose {videoid}|{user_id}",
-                style=ButtonStyle.DANGER,
             )
         ],
     ]
@@ -67,7 +54,7 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
 
     rows = []
 
-    # Progress bar (No extra buttons in this row)
+    # Progress bar (Optional: Agar aap chahte hain ki buttons me bhi progress bar dikhe)
     bar = _progress_bar(played, dur) if played is not None and dur else None
 
     if bar:
@@ -76,33 +63,29 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
                 InlineKeyboardButton(
                     text=f"{played}  {bar}  {dur}",
                     callback_data="GetTimer"
-                    # Yahan se style=ButtonStyle.SECONDARY hata diya gaya hai taaki crash na ho
                 )
             ]
         )
 
-    # Main player controls matching the image exactly
+    # Main player controls
     rows.append(
         [
             InlineKeyboardButton(
                 text="↶ Replay",
                 callback_data=f"ADMIN Replay|{chat_id}",
-                style=ButtonStyle.PRIMARY,
             ),
             InlineKeyboardButton(
                 text="Ⅱ Pause" if playing else "▶ Resume",
                 callback_data=f"ADMIN {'Pause' if playing else 'Resume'}|{chat_id}",
-                style=ButtonStyle.PRIMARY,
             ),
             InlineKeyboardButton(
                 text="» Skip",
                 callback_data=f"ADMIN Skip|{chat_id}",
-                style=ButtonStyle.PRIMARY,
             ),
         ]
     )
 
-    # Queue button matching the image
+    # Queue button
     queue_count = max(0, len(current) - 1)
     videoid = current[0].get("vidid", "") if current else ""
 
@@ -110,8 +93,7 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
         [
             InlineKeyboardButton(
                 text=f"≡ Queue • {queue_count}",
-                callback_data=f"GetQueued g|{videoid}",
-                style=ButtonStyle.PRIMARY,
+                callback_data=f"GetQueuedg|{videoid}",
             )
         ]
     )
@@ -167,19 +149,16 @@ def playlist_markup(_, videoid, user_id, ptype, channel, fplay):
             InlineKeyboardButton(
                 text=_["P_B_1"],
                 callback_data=f"DevSpPlaylists {videoid}|{user_id}|{ptype}|a|{channel}|{fplay}",
-                style=ButtonStyle.PRIMARY,
             ),
             InlineKeyboardButton(
                 text=_["P_B_2"],
                 callback_data=f"DevSpPlaylists {videoid}|{user_id}|{ptype}|v|{channel}|{fplay}",
-                style=ButtonStyle.SUCCESS,
             ),
         ],
         [
             InlineKeyboardButton(
                 text=_["CLOSE_BUTTON"],
                 callback_data=f"forceclose {videoid}|{user_id}",
-                style=ButtonStyle.DANGER,
             ),
         ],
     ]
@@ -192,14 +171,12 @@ def livestream_markup(_, videoid, user_id, mode, channel, fplay):
             InlineKeyboardButton(
                 text=_["P_B_3"],
                 callback_data=f"LiveStream {videoid}|{user_id}|{mode}|{channel}|{fplay}",
-                style=ButtonStyle.PRIMARY,
             ),
         ],
         [
             InlineKeyboardButton(
                 text=_["CLOSE_BUTTON"],
                 callback_data=f"forceclose {videoid}|{user_id}",
-                style=ButtonStyle.DANGER,
             ),
         ],
     ]
@@ -213,29 +190,24 @@ def slider_markup(_, videoid, user_id, query, query_type, channel, fplay):
             InlineKeyboardButton(
                 text=_["P_B_1"],
                 callback_data=f"MusicStream {videoid}|{user_id}|a|{channel}|{fplay}",
-                style=ButtonStyle.PRIMARY,
             ),
             InlineKeyboardButton(
                 text=_["P_B_2"],
                 callback_data=f"MusicStream {videoid}|{user_id}|v|{channel}|{fplay}",
-                style=ButtonStyle.SUCCESS,
             ),
         ],
         [
             InlineKeyboardButton(
                 text="◁",
                 callback_data=f"slider B|{query_type}|{query}|{user_id}|{channel}|{fplay}",
-                style=ButtonStyle.PRIMARY,
             ),
             InlineKeyboardButton(
                 text=_["CLOSE_BUTTON"],
                 callback_data=f"forceclose {query}|{user_id}",
-                style=ButtonStyle.DANGER,
             ),
             InlineKeyboardButton(
                 text="▷",
                 callback_data=f"slider F|{query_type}|{query}|{user_id}|{channel}|{fplay}",
-                style=ButtonStyle.PRIMARY,
             ),
         ],
     ]
