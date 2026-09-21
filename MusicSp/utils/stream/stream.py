@@ -5,7 +5,6 @@ from typing import Union
 
 from pyrogram.raw import types as raw_types
 from pyrogram.types import InlineKeyboardMarkup, InputRichMessage
-from pyrogram import utils
 
 import config
 from MusicSp import Carbon, YouTube, app
@@ -25,11 +24,10 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
     Yahan reply_markup NAHI dena hai, warna Telegram purane buttons dikha dega.
     """
     try:
-        # 1. Photo ko temporarily upload karke InputPhoto object nikalein
+        # 1. Photo ko temporarily upload karein (utils.get_input_photo hata diya gaya hai)
         temp_msg = await app.send_photo(chat_id=chat_id, photo=photo)
-        input_photo = utils.get_input_photo(temp_msg.photo)
-        await temp_msg.delete()
-
+        photo_file_id = temp_msg.photo.file_id
+        
         # 2. Standard inline buttons ko PageBlockButtonRow mein convert karein
         button_rows = []
         for row in button:
@@ -60,27 +58,31 @@ async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, butt
                 )
 
         # 3. Rich blocks banayein (Photo + Caption + Progress Bar + Buttons)
+        # Note: PageBlockPhoto mein sirf file_id pass karna hai
         rich_blocks = [
             raw_types.PageBlockPhoto(
-                photo_id=input_photo,
+                photo_id=photo_file_id,
                 caption=raw_types.PageCaption(
                     text=raw_types.TextRich(text=caption)
                 )
             ),
             raw_types.PageBlockProgressBar(
-                progress=0,  # 0 se 100 tak
+                progress=0,  # 0 se 100 tak (dynamic karne ke liye play.py mein edit_rich_message use karein)
                 text=raw_types.TextPlain(text=f"00:00 / {duration_min}")
             )
         ]
         rich_blocks.extend(button_rows)
 
         # 4. Rich message bhejein (reply_markup bilkul nahi dena)
+        # Temporary photo ko delete karein taaki chat mein 2 photo na dikhein
+        await temp_msg.delete()
+        
         return await app.send_rich_message(
             chat_id=chat_id,
             rich_message=InputRichMessage(blocks=rich_blocks)
         )
     except Exception as e:
-        # 🔥 Yahan error print karo taaki Heroku logs mein asli dikkat dikhe
+        # 🔥 Error print karein taaki Heroku logs mein asli dikkat dikhe
         print(f"❌ RICH MESSAGE FAILED: {e}")
         traceback.print_exc()
         
