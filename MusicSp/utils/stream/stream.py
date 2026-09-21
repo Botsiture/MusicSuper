@@ -1,9 +1,7 @@
 import os
-import traceback
 from random import randint
 from typing import Union
 
-from pyrogram import types
 from pyrogram.types import InlineKeyboardMarkup
 
 import config
@@ -13,46 +11,9 @@ from MusicSp.misc import db
 from MusicSp.utils.database import add_active_video_chat, is_active_chat
 from MusicSp.utils.exceptions import AssistantErr
 from MusicSp.utils.inline import aq_markup, close_markup, stream_markup
-from MusicSp.utils.inline.play import _convert_to_rich_buttons
 from MusicSp.utils.pastebin import DevSpBin
 from MusicSp.utils.stream.queue import put_queue, put_queue_index
 from MusicSp.utils.thumbnails import gen_thumb
-
-
-async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, button):
-    """
-    Native Rich Message system ka helper without unnecessary upload/delete.
-    """
-    try:
-        rich_button_rows = _convert_to_rich_buttons(button)
-
-        rich_blocks = [
-            types.InputRichBlockPhoto(
-                photo=photo,  # Direct local path ya URL
-                caption=types.RichTextPlain(text=caption)
-            ),
-            types.InputRichBlockProgressBar(
-                progress=0,
-                text=types.RichTextPlain(text=f"00:00  ─────●────  {duration_min}")
-            )
-        ]
-        rich_blocks.extend(rich_button_rows)
-
-        # Directly send the unified block array
-        return await app.send_rich_message(
-            chat_id=chat_id,
-            rich_message=types.InputRichMessage(blocks=rich_blocks)
-        )
-    except Exception as e:
-        print(f"❌ RICH MESSAGE FAILED: {e}")
-        traceback.print_exc()
-        # Fallback to standard message
-        return await app.send_photo(
-            chat_id=chat_id,
-            photo=photo,
-            caption=caption,
-            reply_markup=InlineKeyboardMarkup(button)
-        )
 
 
 async def stream(
@@ -143,16 +104,19 @@ async def stream(
                 img = await gen_thumb(vidid)
                 button = stream_markup(_, chat_id)
                 caption = _["stream_1"].format(
-                    f"https://t.me/{app.username}?start=info_{vidid}",
+                    f"[https://t.me/](https://t.me/){app.username}?start=info_{vidid}",
                     title[:23],
                     duration_min,
                     user_name,
                 )
-                run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
+                run = await app.send_photo(
+                    chat_id=original_chat_id,
+                    photo=img,
+                    caption=caption,
+                    reply_markup=InlineKeyboardMarkup(button),
+                )
                 db[chat_id][0]["mystic"] = run
                 db[chat_id][0]["markup"] = "stream"
-                db[chat_id][0]["photo"] = img
-                db[chat_id][0]["caption"] = caption
         if count == 0:
             return
         else:
@@ -236,16 +200,19 @@ async def stream(
             img = await gen_thumb(vidid)
             button = stream_markup(_, chat_id)
             caption = _["stream_1"].format(
-                f"https://t.me/{app.username}?start=info_{vidid}",
+                f"[https://t.me/](https://t.me/){app.username}?start=info_{vidid}",
                 title[:23],
                 duration_min,
                 user_name,
             )
-            run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
+            run = await app.send_photo(
+                chat_id=original_chat_id,
+                photo=img,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(button),
+            )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "stream"
-            db[chat_id][0]["photo"] = img
-            db[chat_id][0]["caption"] = caption
 
     elif streamtype == "soundcloud":
         file_path = result["filepath"]
@@ -291,11 +258,14 @@ async def stream(
             caption = _["stream_1"].format(
                 config.SUPPORT_GROUP, title[:23], duration_min, user_name
             )
-            run = await _send_rich_stream_msg(app, original_chat_id, config.SOUNCLOUD_IMG_URL, caption, duration_min, button)
+            run = await app.send_photo(
+                chat_id=original_chat_id,
+                photo=config.SOUNCLOUD_IMG_URL,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(button),
+            )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
-            db[chat_id][0]["photo"] = config.SOUNCLOUD_IMG_URL
-            db[chat_id][0]["caption"] = caption
 
     elif streamtype == "telegram":
         file_path = result["path"]
@@ -344,11 +314,14 @@ async def stream(
             button = stream_markup(_, chat_id)
             photo = config.TELEGRAM_VIDEO_URL if video else config.TELEGRAM_AUDIO_URL
             caption = _["stream_1"].format(link, title[:23], duration_min, user_name)
-            run = await _send_rich_stream_msg(app, original_chat_id, photo, caption, duration_min, button)
+            run = await app.send_photo(
+                chat_id=original_chat_id,
+                photo=photo,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(button),
+            )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
-            db[chat_id][0]["photo"] = photo
-            db[chat_id][0]["caption"] = caption
 
     elif streamtype == "live":
         link = result["link"]
@@ -405,16 +378,19 @@ async def stream(
             img = await gen_thumb(vidid)
             button = stream_markup(_, chat_id)
             caption = _["stream_1"].format(
-                f"https://t.me/{app.username}?start=info_{vidid}",
+                f"[https://t.me/](https://t.me/){app.username}?start=info_{vidid}",
                 title[:23],
                 duration_min,
                 user_name,
             )
-            run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
+            run = await app.send_photo(
+                chat_id=original_chat_id,
+                photo=img,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(button),
+            )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
-            db[chat_id][0]["photo"] = img
-            db[chat_id][0]["caption"] = caption
 
     elif streamtype == "index":
         link = result
@@ -460,9 +436,12 @@ async def stream(
             )
             button = stream_markup(_, chat_id)
             caption = _["stream_2"].format(user_name)
-            run = await _send_rich_stream_msg(app, original_chat_id, config.STREAM_IMG_URL, caption, duration_min, button)
+            run = await app.send_photo(
+                chat_id=original_chat_id,
+                photo=config.STREAM_IMG_URL,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(button),
+            )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
-            db[chat_id][0]["photo"] = config.STREAM_IMG_URL
-            db[chat_id][0]["caption"] = caption
             await mystic.delete()
