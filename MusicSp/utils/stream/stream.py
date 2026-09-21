@@ -2,7 +2,9 @@ import os
 from random import randint
 from typing import Union
 
-from pyrogram.types import InlineKeyboardMarkup
+from pyrogram.raw import types as raw_types
+from pyrogram.types import InlineKeyboardMarkup, InputRichMessage
+from pyrogram import utils
 
 import config
 from MusicSp import Carbon, YouTube, app
@@ -14,6 +16,47 @@ from MusicSp.utils.inline import aq_markup, close_markup, stream_markup
 from MusicSp.utils.pastebin import DevSpBin
 from MusicSp.utils.stream.queue import put_queue, put_queue_index
 from MusicSp.utils.thumbnails import gen_thumb
+
+
+async def _send_rich_stream_msg(app, chat_id, photo, caption, duration_min, button):
+    """
+    Helper function to send a rich message with photo, caption, progress bar, and buttons.
+    """
+    try:
+        # 1. Upload photo temporarily to get InputPhoto object
+        temp_msg = await app.send_photo(chat_id=chat_id, photo=photo)
+        input_photo = utils.get_input_photo(temp_msg.photo)
+        await temp_msg.delete()
+
+        # 2. Create rich message blocks
+        rich_blocks = [
+            raw_types.PageBlockPhoto(
+                photo_id=input_photo,
+                caption=raw_types.PageCaption(
+                    text=raw_types.TextRich(text=caption)
+                )
+            ),
+            raw_types.PageBlockProgressBar(
+                progress=0,  # 0 to 100
+                text=raw_types.TextPlain(text=f"00:00 / {duration_min}")
+            )
+        ]
+
+        # 3. Send rich message
+        return await app.send_rich_message(
+            chat_id=chat_id,
+            rich_message=InputRichMessage(blocks=rich_blocks),
+            reply_markup=InlineKeyboardMarkup(button)
+        )
+    except Exception as e:
+        # Fallback to normal photo if rich message fails
+        print(f"Rich message failed, falling back to normal photo: {e}")
+        return await app.send_photo(
+            chat_id=chat_id,
+            photo=photo,
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup(button)
+        )
 
 
 async def stream(
@@ -102,17 +145,13 @@ async def stream(
                 )
                 img = await gen_thumb(vidid)
                 button = stream_markup(_, chat_id)
-                run = await app.send_photo(
-                    original_chat_id,
-                    photo=img,
-                    caption=_["stream_1"].format(
-                        f"https://t.me/{app.username}?start=info_{vidid}",
-                        title[:23],
-                        duration_min,
-                        user_name,
-                    ),
-                    reply_markup=InlineKeyboardMarkup(button),
+                caption = _["stream_1"].format(
+                    f"https://t.me/{app.username}?start=info_{vidid}",
+                    title[:23],
+                    duration_min,
+                    user_name,
                 )
+                run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
                 db[chat_id][0]["mystic"] = run
                 db[chat_id][0]["markup"] = "stream"
         if count == 0:
@@ -142,7 +181,6 @@ async def stream(
     
         current_queue = db.get(chat_id)
 
-        
         if current_queue is not None and len(current_queue) >= 10:
             return await app.send_message(original_chat_id, "You can't add more than 10 songs to the queue.")
 
@@ -198,17 +236,13 @@ async def stream(
             )
             img = await gen_thumb(vidid)
             button = stream_markup(_, chat_id)
-            run = await app.send_photo(
-                original_chat_id,
-                photo=img,
-                caption=_["stream_1"].format(
-                    f"https://t.me/{app.username}?start=info_{vidid}",
-                    title[:23],
-                    duration_min,
-                    user_name,
-                ),
-                reply_markup=InlineKeyboardMarkup(button),
+            caption = _["stream_1"].format(
+                f"https://t.me/{app.username}?start=info_{vidid}",
+                title[:23],
+                duration_min,
+                user_name,
             )
+            run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "stream"
     elif streamtype == "soundcloud":
@@ -251,14 +285,10 @@ async def stream(
                 forceplay=forceplay,
             )
             button = stream_markup(_, chat_id)
-            run = await app.send_photo(
-                original_chat_id,
-                photo=config.SOUNCLOUD_IMG_URL,
-                caption=_["stream_1"].format(
-                    config.SUPPORT_GROUP, title[:23], duration_min, user_name
-                ),
-                reply_markup=InlineKeyboardMarkup(button),
+            caption = _["stream_1"].format(
+                config.SUPPORT_GROUP, title[:23], duration_min, user_name
             )
+            run = await _send_rich_stream_msg(app, original_chat_id, config.SOUNCLOUD_IMG_URL, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
     elif streamtype == "telegram":
@@ -305,12 +335,9 @@ async def stream(
             if video:
                 await add_active_video_chat(chat_id)
             button = stream_markup(_, chat_id)
-            run = await app.send_photo(
-                original_chat_id,
-                photo=config.TELEGRAM_VIDEO_URL if video else config.TELEGRAM_AUDIO_URL,
-                caption=_["stream_1"].format(link, title[:23], duration_min, user_name),
-                reply_markup=InlineKeyboardMarkup(button),
-            )
+            photo = config.TELEGRAM_VIDEO_URL if video else config.TELEGRAM_AUDIO_URL
+            caption = _["stream_1"].format(link, title[:23], duration_min, user_name)
+            run = await _send_rich_stream_msg(app, original_chat_id, photo, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
     elif streamtype == "live":
@@ -366,17 +393,13 @@ async def stream(
             )
             img = await gen_thumb(vidid)
             button = stream_markup(_, chat_id)
-            run = await app.send_photo(
-                original_chat_id,
-                photo=img,
-                caption=_["stream_1"].format(
-                    f"https://t.me/{app.username}?start=info_{vidid}",
-                    title[:23],
-                    duration_min,
-                    user_name,
-                ),
-                reply_markup=InlineKeyboardMarkup(button),
+            caption = _["stream_1"].format(
+                f"https://t.me/{app.username}?start=info_{vidid}",
+                title[:23],
+                duration_min,
+                user_name,
             )
+            run = await _send_rich_stream_msg(app, original_chat_id, img, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
     elif streamtype == "index":
@@ -421,12 +444,8 @@ async def stream(
                 forceplay=forceplay,
             )
             button = stream_markup(_, chat_id)
-            run = await app.send_photo(
-                original_chat_id,
-                photo=config.STREAM_IMG_URL,
-                caption=_["stream_2"].format(user_name),
-                reply_markup=InlineKeyboardMarkup(button),
-            )
+            caption = _["stream_2"].format(user_name)
+            run = await _send_rich_stream_msg(app, original_chat_id, config.STREAM_IMG_URL, caption, duration_min, button)
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
             await mystic.delete()
