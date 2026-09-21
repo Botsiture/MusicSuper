@@ -77,65 +77,62 @@ async def gen_thumb(videoid: str):
         # 3. Process Image
         youtube = Image.open(filepath).convert("RGBA")
         
-        # Make sure this path matches where you upload your template
-        bg_path = "assets/custom_bg.png" 
+        # A. Create Blurred Background
+        background = youtube.copy()
+        background = changeImageSize(1280, 720, background)
+        background = background.filter(ImageFilter.GaussianBlur(20))
         
-        if os.path.exists(bg_path):
-            # A. Custom Template Logic
-            background = Image.open(bg_path).convert("RGBA")
-            background = background.resize((1280, 720))
-            
-            # Resize original YT thumbnail to fit inside the template's screen
-            yt_w, yt_h = 760, 430
-            youtube = youtube.resize((yt_w, yt_h))
-            
-            # Create rounded corners for the YT thumbnail
-            mask = Image.new("L", (yt_w, yt_h), 0)
-            draw_mask = ImageDraw.Draw(mask)
-            draw_mask.rounded_rectangle([(0, 0), (yt_w, yt_h)], radius=20, fill=255)
-            
-            # Paste the YT thumbnail onto your background template
-            # Coordinates (X=260, Y=60) - You can adjust these to perfectly center it inside your frame
-            background.paste(youtube, (260, 60), mask)
-            
-            # B. Draw Dynamic Text
-            draw = ImageDraw.Draw(background)
-            
-            try:
-                # Make sure you upload a font file in the assets folder
-                font_title = ImageFont.truetype("assets/font.ttf", 34)
-                font_channel = ImageFont.truetype("assets/font.ttf", 26)
-                font_dur = ImageFont.truetype("assets/font.ttf", 22)
-            except:
-                font_title = ImageFont.load_default()
-                font_channel = ImageFont.load_default()
-                font_dur = ImageFont.load_default()
-            
-            # Draw Title
-            titles = truncate(title)
-            # Coordinates (X=320, Y=520) - Adjust based on your text area position
-            draw.text((320, 520), titles[0], fill="white", font=font_title)
-            if titles[1]:
-                draw.text((320, 560), titles[1], fill="white", font=font_title)
-                
-            # Draw Artist/Channel
-            draw.text((320, 610), channel, fill="#b3b3b3", font=font_channel)
-            
-            # Draw Duration (Left & Right of Progress Bar)
-            draw.text((940, 645), duration, fill="white", font=font_dur)
-            draw.text((320, 645), "0:00", fill="white", font=font_dur)
-            
-            final_image = background.convert("RGB")
-        else:
-            # Fallback if custom_bg.png is missing (Blurs the thumbnail to avoid crashes)
-            background = youtube.copy()
-            background = changeImageSize(1280, 720, background)
-            background = background.filter(ImageFilter.GaussianBlur(15))
-            youtube_resized = changeImageSize(840, 470, youtube)
-            x = (1280 - youtube_resized.width) // 2
-            y = (720 - youtube_resized.height) // 2
-            background.paste(youtube_resized, (x, y))
-            final_image = background.convert("RGB")
+        # B. Make Center Image with Smooth Curved Corners
+        yt_w, yt_h = 840, 470
+        youtube_resized = changeImageSize(yt_w, yt_h, youtube)
+        
+        # Mask for curved corners
+        mask = Image.new("L", (yt_w, yt_h), 0)
+        draw_mask = ImageDraw.Draw(mask)
+        draw_mask.rounded_rectangle([(0, 0), (yt_w, yt_h)], radius=35, fill=255) # radius=35 gives a smooth curve
+        
+        # Paste curved image exactly in the top-center
+        x_offset = (1280 - yt_w) // 2
+        y_offset = 50
+        background.paste(youtube_resized, (x_offset, y_offset), mask)
+        
+        # C. Draw UI (Progress Bar & Text)
+        draw = ImageDraw.Draw(background)
+        
+        # Load Fonts (Use defaults if assets missing, but recommend uploading Arial/Roboto)
+        try:
+            font_title = ImageFont.truetype("assets/font.ttf", 36)
+            font_channel = ImageFont.truetype("assets/font.ttf", 26)
+            font_dur = ImageFont.truetype("assets/font.ttf", 24)
+        except:
+            font_title = ImageFont.load_default()
+            font_channel = ImageFont.load_default()
+            font_dur = ImageFont.load_default()
+        
+        # Draw Progress Bar
+        bar_x1 = 220
+        bar_x2 = 1060
+        bar_y = 620
+        
+        # Background grey line
+        draw.line([(bar_x1, bar_y), (bar_x2, bar_y)], fill="#555555", width=8)
+        # White filled progress (approx 30%)
+        draw.line([(bar_x1, bar_y), (450, bar_y)], fill="white", width=8)
+        # Progress Dot (Circle)
+        draw.ellipse([(440, bar_y - 10), (460, bar_y + 10)], fill="white")
+        
+        # Draw Timestamps
+        draw.text((bar_x1, bar_y + 15), "0:00", fill="white", font=font_dur)
+        # Align duration to the right
+        dur_w = draw.textlength(duration, font=font_dur) if hasattr(draw, 'textlength') else 50
+        draw.text((bar_x2 - dur_w, bar_y + 15), duration, fill="white", font=font_dur)
+        
+        # Draw Title & Channel Name
+        titles = truncate(title)
+        draw.text((bar_x1, 540), titles[0], fill="white", font=font_title)
+        draw.text((bar_x1, 580), channel, fill="#cccccc", font=font_channel)
+        
+        final_image = background.convert("RGB")
             
         try:
             os.remove(filepath)
