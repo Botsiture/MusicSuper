@@ -1,8 +1,9 @@
 import asyncio
 import os
 import re
+import shutil
 import time
-from typing import Union, Dict, Tuple, Any, List
+from typing import Union, Dict, Tuple, List
 import yt_dlp
 from pyrogram.enums import MessageEntityType
 from pyrogram.types import Message
@@ -15,13 +16,23 @@ if API_URL:
     API_URL = API_URL.rstrip("/")
 API_KEY = config.API_KEY or os.environ.get("MusicSp_API_KEY", None)
 
-DOWNLOAD_DIR = "downloads"
+# ============================================================
+#  HEROKU-AWARE DOWNLOAD DIR
+#  Heroku only /tmp is writable. Ephemeral per dyno cycle.
+# ============================================================
+IS_HEROKU = bool(os.environ.get("DYNO"))
+if IS_HEROKU:
+    DOWNLOAD_DIR = "/tmp/downloads"
+else:
+    DOWNLOAD_DIR = os.path.join(os.getcwd(), "downloads")
+
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # ============================================================
-#  SUPERFAST SEARCH CACHE  (single fetch -> many reuse)
+#  SUPERFAST SEARCH CACHE
 # ============================================================
 _SEARCH_CACHE: Dict[str, Tuple[float, List[dict]]] = {}
-_SEARCH_CACHE_TTL = 900       # 15 minutes
+_SEARCH_CACHE_TTL = 900
 _SEARCH_CACHE_MAX = 600
 _INFLIGHT: Dict[str, asyncio.Task] = {}
 
@@ -59,18 +70,17 @@ async def _do_search(query: str, limit: int = 10) -> List[dict]:
 
 
 async def _search(query: str, limit: int = 1) -> List[dict]:
-    """
-    एक ही upstream fetch (limit=10) कैश होगा और track/details/slider
-    सब उसी result को reuse करेंगे -> बहुत fast.
-    """
     cached = _cache_get(query)
     if cached is not None:
         return cached[:limit]
 
     inflight = _INFLIGHT.get(query)
     if inflight is not None:
-        full = await inflight
-        return full[:limit]
+        try:
+            full = await inflight
+            return full[:limit]
+        except Exception:
+            return []
 
     task = asyncio.ensure_future(_do_search(query, 10))
     _INFLIGHT[query] = task
@@ -82,7 +92,7 @@ async def _search(query: str, limit: int = 1) -> List[dict]:
 
 
 def prefetch_search(query: str):
-    """Background में cache warm करो (fire & forget)."""
+    """Background cache warm — fire & forget."""
     if not query or _cache_get(query) is not None or query in _INFLIGHT:
         return
     try:
@@ -92,7 +102,7 @@ def prefetch_search(query: str):
 
 
 # ============================================================
-#  SHARED HTTP SESSION (faster downloads)
+#  SHARED HTTP SESSION
 # ============================================================
 _SESSION: aiohttp.ClientSession = None
 
@@ -101,95 +111,252 @@ async def _get_session() -> aiohttp.ClientSession:
     global _SESSION
     if _SESSION is None or _SESSION.closed:
         connector = aiohttp.TCPConnector(
-            limit=50, ttl_dns_cache=300, force_close=False
+            limit=50,
+            ttl_dns_cache=300,
+            force_close=False,
+            enable_cleanup_closed=True,
         )
         _SESSION = aiohttp.ClientSession(connector=connector)
     return _SESSION
 
 
 # ============================================================
-#  DOWNLOAD HELPERS
+#  HELPERS
 # ============================================================
+def _vid_from_link(link: str) -> str:
+    if "v=" in link:
+        return link.split("v=")[-1].split("&")[0]
+    if "youtu.be/" in link:
+        return link.split("youtu.be/")[-1].split("?")[0]
+    return link
+
+
+def _is_valid_audio(path: str, min_size: int = 100 * 1024) -> bool:
+    if not os.path.exists(path):
+        return False
+    size = os.path.getsize(path)
+    if size < min_size:
+        return False
+    try:
+        with open(path, "rb") as f:
+            head = f.read(3)
+        # ID3 tag or MP3 frame sync
+        if head[:3] == b"ID3" or (len(head) >= 1 and head[0] == 0xFF):
+            return True
+        # Some APIs send raw frames without ID3
+        return size >= min_size
+    except Exception:
+        return False
+
+
+def _is_valid_video(path: str, min_size: int = 500 * 1024) -> bool:
+    if not os.path.exists(path):
+        return False
+    return os.path.getsize(path) >= min_size
+
+
+# ============================================================
+#  DOWNLOAD WITH YT-DLP FALLBACK (HIGH QUALITY)
+# ============================================================
+def _yt_dlp_download_sync(video_id: str, audio: bool = True, hq: bool = True) -> str:
+    """Blocking yt-dlp download. Runs in executor."""
+    if audio:
+        out_path = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp3")
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": os.path.join(DOWNLOAD_DIR, f"{video_id}.%(ext)s"),
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192" if hq else "128",
+                }
+            ],
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "nocheckcertificate": True,
+            "retries": 3,
+            "fragment_retries": 3,
+            "socket_timeout": 30,
+        }
+    else:
+        out_path = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp4")
+        ydl_opts = {
+            "format": "best[ext=mp4][height<=480]/best[height<=480]/best",
+            "outtmpl": out_path,
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "nocheckcertificate": True,
+            "retries": 3,
+            "fragment_retries": 3,
+            "socket_timeout": 30,
+        }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+
+    return out_path if os.path.exists(out_path) else None
+
+
 async def download_song(link: str) -> str:
-    video_id = link.split("v=")[-1].split("&")[0] if "v=" in link else link
+    video_id = _vid_from_link(link)
     if not video_id or len(video_id) < 3:
         return None
 
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     file_path = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp3")
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+
+    # Cache hit
+    if _is_valid_audio(file_path):
         return file_path
 
-    if not API_URL:
-        return None
+    # ---- Try primary API (fast) ----
+    if API_URL:
+        params = {
+            "url": video_id,
+            "type": "audio",
+            "quality": "high",     # API hint
+            "bitrate": "192",
+        }
+        if API_KEY:
+            params["api_key"] = API_KEY
 
-    params = {"url": video_id, "type": "audio"}
-    if API_KEY:
-        params["api_key"] = API_KEY
+        try:
+            session = await _get_session()
+            async with session.get(
+                f"{API_URL}/download",
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=180),
+            ) as resp:
+                if resp.status == 200:
+                    with open(file_path, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(262144):
+                            f.write(chunk)
+                    if _is_valid_audio(file_path):
+                        return file_path
+                    # invalid → delete
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+        except Exception:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
 
+    # ---- Fallback: yt-dlp HQ (slow but guaranteed) ----
     try:
-        session = await _get_session()
-        async with session.get(
-            f"{API_URL}/download",
-            params=params,
-            timeout=aiohttp.ClientTimeout(total=180),
-        ) as resp:
-            if resp.status != 200:
-                return None
-            with open(file_path, "wb") as f:
-                async for chunk in resp.content.iter_chunked(262144):
-                    f.write(chunk)
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            return file_path
-        return None
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, _yt_dlp_download_sync, video_id, True, True
+        )
+        if result and _is_valid_audio(result):
+            return result
     except Exception:
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-        return None
+        pass
+
+    return None
 
 
 async def download_video(link: str) -> str:
-    video_id = link.split("v=")[-1].split("&")[0] if "v=" in link else link
+    video_id = _vid_from_link(link)
     if not video_id or len(video_id) < 3:
         return None
 
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     file_path = os.path.join(DOWNLOAD_DIR, f"{video_id}.mp4")
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+
+    if _is_valid_video(file_path):
         return file_path
 
-    if not API_URL:
-        return None
+    # ---- Try primary API ----
+    if API_URL:
+        params = {"url": video_id, "type": "video", "quality": "high"}
+        if API_KEY:
+            params["api_key"] = API_KEY
 
-    params = {"url": video_id, "type": "video"}
-    if API_KEY:
-        params["api_key"] = API_KEY
+        try:
+            session = await _get_session()
+            async with session.get(
+                f"{API_URL}/download",
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=300),
+            ) as resp:
+                if resp.status == 200:
+                    with open(file_path, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(262144):
+                            f.write(chunk)
+                    if _is_valid_video(file_path):
+                        return file_path
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+        except Exception:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
 
+    # ---- Fallback: yt-dlp ----
     try:
-        session = await _get_session()
-        async with session.get(
-            f"{API_URL}/download",
-            params=params,
-            timeout=aiohttp.ClientTimeout(total=300),
-        ) as resp:
-            if resp.status != 200:
-                return None
-            with open(file_path, "wb") as f:
-                async for chunk in resp.content.iter_chunked(262144):
-                    f.write(chunk)
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            return file_path
-        return None
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, _yt_dlp_download_sync, video_id, False, True
+        )
+        if result and _is_valid_video(result):
+            return result
     except Exception:
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-        return None
+        pass
+
+    return None
+
+
+# ============================================================
+#  HEROKU CACHE CLEANUP (24h old files delete)
+# ============================================================
+async def cleanup_downloads(max_age_hours: int = 12, max_size_mb: int = 500):
+    """Background task: keeps /tmp/downloads from filling up."""
+    while True:
+        try:
+            now = time.time()
+            max_age = max_age_hours * 3600
+            total = 0
+            files = []
+            for f in os.listdir(DOWNLOAD_DIR):
+                p = os.path.join(DOWNLOAD_DIR, f)
+                if not os.path.isfile(p):
+                    continue
+                st = os.stat(p)
+                if now - st.st_mtime > max_age:
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+                else:
+                    total += st.st_size
+                    files.append((p, st.st_mtime))
+
+            # If still over size limit, delete oldest
+            limit_bytes = max_size_mb * 1024 * 1024
+            if total > limit_bytes:
+                files.sort(key=lambda x: x[1])
+                for p, _ in files:
+                    try:
+                        os.remove(p)
+                        total -= os.path.getsize(p) if os.path.exists(p) else 0
+                    except Exception:
+                        pass
+                    if total <= limit_bytes:
+                        break
+        except Exception:
+            pass
+        await asyncio.sleep(1800)   # every 30 min
 
 
 # ============================================================
@@ -331,26 +498,29 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        ytdl_opts = {"quiet": True}
+        ytdl_opts = {"quiet": True, "no_warnings": True}
         ydl = yt_dlp.YoutubeDL(ytdl_opts)
-        with ydl:
-            formats_available = []
-            r = ydl.extract_info(link, download=False)
-            for format in r["formats"]:
-                try:
-                    if "dash" not in str(format["format"]).lower():
-                        formats_available.append(
-                            {
-                                "format": format["format"],
-                                "filesize": format.get("filesize"),
-                                "format_id": format["format_id"],
-                                "ext": format["ext"],
-                                "format_note": format["format_note"],
-                                "yturl": link,
-                            }
-                        )
-                except Exception:
-                    continue
+        formats_available = []
+        try:
+            with ydl:
+                r = ydl.extract_info(link, download=False)
+                for format in r.get("formats", []):
+                    try:
+                        if "dash" not in str(format["format"]).lower():
+                            formats_available.append(
+                                {
+                                    "format": format["format"],
+                                    "filesize": format.get("filesize"),
+                                    "format_id": format["format_id"],
+                                    "ext": format["ext"],
+                                    "format_note": format["format_note"],
+                                    "yturl": link,
+                                }
+                            )
+                    except Exception:
+                        continue
+        except Exception:
+            pass
         return formats_available, link
 
     async def slider(self, link: str, query_type: int, videoid: Union[bool, str] = None):
