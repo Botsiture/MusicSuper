@@ -1,7 +1,8 @@
 import asyncio
 import os
 import re
-from typing import Union
+import time
+from typing import Union, Dict, Tuple, Any, List
 import yt_dlp
 from pyrogram.enums import MessageEntityType
 from pyrogram.types import Message
@@ -16,12 +17,99 @@ API_KEY = config.API_KEY or os.environ.get("MusicSp_API_KEY", None)
 
 DOWNLOAD_DIR = "downloads"
 
+# ============================================================
+#  SUPERFAST SEARCH CACHE  (single fetch -> many reuse)
+# ============================================================
+_SEARCH_CACHE: Dict[str, Tuple[float, List[dict]]] = {}
+_SEARCH_CACHE_TTL = 900       # 15 minutes
+_SEARCH_CACHE_MAX = 600
+_INFLIGHT: Dict[str, asyncio.Task] = {}
+
 
 def time_to_seconds(time):
     stringt = str(time)
     return sum(int(x) * 60 ** i for i, x in enumerate(reversed(stringt.split(":"))))
 
 
+def _cache_get(key: str):
+    entry = _SEARCH_CACHE.get(key)
+    if not entry:
+        return None
+    ts, value = entry
+    if time.time() - ts > _SEARCH_CACHE_TTL:
+        _SEARCH_CACHE.pop(key, None)
+        return None
+    return value
+
+
+def _cache_set(key: str, value: List[dict]):
+    _SEARCH_CACHE[key] = (time.time(), value)
+    if len(_SEARCH_CACHE) > _SEARCH_CACHE_MAX:
+        evict_n = max(1, _SEARCH_CACHE_MAX // 5)
+        for k, _ in sorted(_SEARCH_CACHE.items(), key=lambda kv: kv[1][0])[:evict_n]:
+            _SEARCH_CACHE.pop(k, None)
+
+
+async def _do_search(query: str, limit: int = 10) -> List[dict]:
+    vs = VideosSearch(query, limit=limit)
+    res = await vs.next()
+    result = (res or {}).get("result") or []
+    _cache_set(query, result)
+    return result
+
+
+async def _search(query: str, limit: int = 1) -> List[dict]:
+    """
+    एक ही upstream fetch (limit=10) कैश होगा और track/details/slider
+    सब उसी result को reuse करेंगे -> बहुत fast.
+    """
+    cached = _cache_get(query)
+    if cached is not None:
+        return cached[:limit]
+
+    inflight = _INFLIGHT.get(query)
+    if inflight is not None:
+        full = await inflight
+        return full[:limit]
+
+    task = asyncio.ensure_future(_do_search(query, 10))
+    _INFLIGHT[query] = task
+    try:
+        full = await task
+    finally:
+        _INFLIGHT.pop(query, None)
+    return full[:limit]
+
+
+def prefetch_search(query: str):
+    """Background में cache warm करो (fire & forget)."""
+    if not query or _cache_get(query) is not None or query in _INFLIGHT:
+        return
+    try:
+        asyncio.ensure_future(_search(query, 10))
+    except Exception:
+        pass
+
+
+# ============================================================
+#  SHARED HTTP SESSION (faster downloads)
+# ============================================================
+_SESSION: aiohttp.ClientSession = None
+
+
+async def _get_session() -> aiohttp.ClientSession:
+    global _SESSION
+    if _SESSION is None or _SESSION.closed:
+        connector = aiohttp.TCPConnector(
+            limit=50, ttl_dns_cache=300, force_close=False
+        )
+        _SESSION = aiohttp.ClientSession(connector=connector)
+    return _SESSION
+
+
+# ============================================================
+#  DOWNLOAD HELPERS
+# ============================================================
 async def download_song(link: str) -> str:
     video_id = link.split("v=")[-1].split("&")[0] if "v=" in link else link
     if not video_id or len(video_id) < 3:
@@ -40,17 +128,17 @@ async def download_song(link: str) -> str:
         params["api_key"] = API_KEY
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{API_URL}/download",
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=180)
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                with open(file_path, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(131072):
-                        f.write(chunk)
+        session = await _get_session()
+        async with session.get(
+            f"{API_URL}/download",
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=180),
+        ) as resp:
+            if resp.status != 200:
+                return None
+            with open(file_path, "wb") as f:
+                async for chunk in resp.content.iter_chunked(262144):
+                    f.write(chunk)
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
             return file_path
         return None
@@ -81,17 +169,17 @@ async def download_video(link: str) -> str:
         params["api_key"] = API_KEY
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{API_URL}/download",
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=300)
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                with open(file_path, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(131072):
-                        f.write(chunk)
+        session = await _get_session()
+        async with session.get(
+            f"{API_URL}/download",
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=300),
+        ) as resp:
+            if resp.status != 200:
+                return None
+            with open(file_path, "wb") as f:
+                async for chunk in resp.content.iter_chunked(262144):
+                    f.write(chunk)
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
             return file_path
         return None
@@ -104,6 +192,9 @@ async def download_video(link: str) -> str:
         return None
 
 
+# ============================================================
+#  MAIN API CLASS
+# ============================================================
 class YouTubeAPI:
     def __init__(self):
         self.base = "https://www.youtube.com/watch?v="
@@ -126,7 +217,8 @@ class YouTubeAPI:
                 for entity in message.entities:
                     if entity.type == MessageEntityType.URL:
                         text = message.text or message.caption
-                        return text[entity.offset: entity.offset + entity.length]
+                        if text:
+                            return text[entity.offset: entity.offset + entity.length]
             elif message.caption_entities:
                 for entity in message.caption_entities:
                     if entity.type == MessageEntityType.TEXT_LINK:
@@ -138,17 +230,16 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        results = VideosSearch(link, limit=1)
-        res = await results.next()
-        if not res or not res.get("result"):
+        result = await _search(link, 1)
+        if not result:
             return "", "0:00", 0, "", ""
-        for result in res["result"]:
-            title = result.get("title", "")
-            duration_min = result.get("duration", "0:00")
-            thumbnails = result.get("thumbnails", [])
-            thumbnail = thumbnails[0]["url"].split("?")[0] if thumbnails else ""
-            vidid = result.get("id", "")
-            duration_sec = int(time_to_seconds(duration_min)) if duration_min else 0
+        r = result[0]
+        title = r.get("title", "")
+        duration_min = r.get("duration", "0:00")
+        thumbnails = r.get("thumbnails", [])
+        thumbnail = thumbnails[0]["url"].split("?")[0] if thumbnails else ""
+        vidid = r.get("id", "")
+        duration_sec = int(time_to_seconds(duration_min)) if duration_min else 0
         return title, duration_min, duration_sec, thumbnail, vidid
 
     async def title(self, link: str, videoid: Union[bool, str] = None):
@@ -156,37 +247,27 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        results = VideosSearch(link, limit=1)
-        res = await results.next()
-        if res and res.get("result"):
-            for result in res["result"]:
-                return result.get("title", "")
-        return ""
+        result = await _search(link, 1)
+        return result[0].get("title", "") if result else ""
 
     async def duration(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        results = VideosSearch(link, limit=1)
-        res = await results.next()
-        if res and res.get("result"):
-            for result in res["result"]:
-                return result.get("duration", "0:00")
-        return "0:00"
+        result = await _search(link, 1)
+        return result[0].get("duration", "0:00") if result else "0:00"
 
     async def thumbnail(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        results = VideosSearch(link, limit=1)
-        res = await results.next()
-        if res and res.get("result"):
-            for result in res["result"]:
-                thumbnails = result.get("thumbnails", [])
-                return thumbnails[0]["url"].split("?")[0] if thumbnails else ""
-        return ""
+        result = await _search(link, 1)
+        if not result:
+            return ""
+        thumbnails = result[0].get("thumbnails", [])
+        return thumbnails[0]["url"].split("?")[0] if thumbnails else ""
 
     async def video(self, link: str, videoid: Union[bool, str] = None):
         if videoid:
@@ -226,17 +307,16 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        results = VideosSearch(link, limit=1)
-        res = await results.next()
-        if not res or not res.get("result"):
+        result = await _search(link, 1)
+        if not result:
             return {}, ""
-        for result in res["result"]:
-            title = result.get("title", "")
-            duration_min = result.get("duration", "0:00")
-            vidid = result.get("id", "")
-            yturl = result.get("link", "")
-            thumbnails = result.get("thumbnails", [])
-            thumbnail = thumbnails[0]["url"].split("?")[0] if thumbnails else ""
+        r = result[0]
+        title = r.get("title", "")
+        duration_min = r.get("duration", "0:00")
+        vidid = r.get("id", "")
+        yturl = r.get("link", "")
+        thumbnails = r.get("thumbnails", [])
+        thumbnail = thumbnails[0]["url"].split("?")[0] if thumbnails else ""
         track_details = {
             "title": title,
             "link": yturl,
@@ -278,15 +358,14 @@ class YouTubeAPI:
             link = self.base + link
         if "&" in link:
             link = link.split("&")[0]
-        a = VideosSearch(link, limit=10)
-        res = await a.next()
-        result = res.get("result") if res else []
+        result = await _search(link, 10)
         if not result or query_type >= len(result):
             return "", "0:00", "", ""
-        title = result[query_type].get("title", "")
-        duration_min = result[query_type].get("duration", "0:00")
-        vidid = result[query_type].get("id", "")
-        thumbnails = result[query_type].get("thumbnails", [])
+        r = result[query_type]
+        title = r.get("title", "")
+        duration_min = r.get("duration", "0:00")
+        vidid = r.get("id", "")
+        thumbnails = r.get("thumbnails", [])
         thumbnail = thumbnails[0]["url"].split("?")[0] if thumbnails else ""
         return title, duration_min, thumbnail, vidid
 
