@@ -11,6 +11,7 @@ else:
         asyncio.set_event_loop(loop)
 
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Union
 
@@ -60,15 +61,24 @@ from strings import get_string
 autoend = {}
 counter = {}
 
+# ============================================================
+#  🛡️ GRACE PERIOD GUARD
+#  PyTgCalls sometimes fires on_left right after join (false
+#  positive). Track join time per chat and ignore on_left
+#  events coming within GRACE seconds.
+# ============================================================
+_recently_joined: dict = {}
+_RECENT_JOIN_GRACE = 10  # seconds
+
 
 # ============================================================
 #  ⚡ SMOOTH VC STREAM PARAMS
-#  HighQualityAudio already = 48kHz, stereo, 128kbps.
-#  Neeche extra ffmpeg flags smoothness ke liye hain.
+#  HighQualityAudio = 48kHz / stereo / 128kbps.
+#  Note: -max_delay was causing early stream termination on
+#  some pytgcalls builds, so it is removed.
 # ============================================================
-SMOOTH_FFMPEG = "-nostdin -threads 2 -bufsize 1024k -max_delay 500000"
+SMOOTH_FFMPEG = "-nostdin -threads 2 -bufsize 512k"
 
-# pytgcalls HighQualityAudio officially: 48kHz, 2ch, 128kbps
 HQ_AUDIO = HighQualityAudio()
 HQ_VIDEO = HighQualityVideo()
 MQ_VIDEO = MediumQualityVideo()
@@ -113,50 +123,39 @@ class Call(PyTgCalls):
             api_hash=config.API_HASH,
             session_string=str(config.STRING1),
         )
-        self.one = PyTgCalls(
-            self.userbot1,
-            cache_duration=100,
-        )
+        self.one = PyTgCalls(self.userbot1)
+
         self.userbot2 = Client(
             name="DevSpAss2",
             api_id=config.API_ID,
             api_hash=config.API_HASH,
             session_string=str(config.STRING2),
         )
-        self.two = PyTgCalls(
-            self.userbot2,
-            cache_duration=100,
-        )
+        self.two = PyTgCalls(self.userbot2)
+
         self.userbot3 = Client(
             name="DevSpAss3",
             api_id=config.API_ID,
             api_hash=config.API_HASH,
             session_string=str(config.STRING3),
         )
-        self.three = PyTgCalls(
-            self.userbot3,
-            cache_duration=100,
-        )
+        self.three = PyTgCalls(self.userbot3)
+
         self.userbot4 = Client(
             name="DevSpAss4",
             api_id=config.API_ID,
             api_hash=config.API_HASH,
             session_string=str(config.STRING4),
         )
-        self.four = PyTgCalls(
-            self.userbot4,
-            cache_duration=100,
-        )
+        self.four = PyTgCalls(self.userbot4)
+
         self.userbot5 = Client(
             name="DevSpAss5",
             api_id=config.API_ID,
             api_hash=config.API_HASH,
             session_string=str(config.STRING5),
         )
-        self.five = PyTgCalls(
-            self.userbot5,
-            cache_duration=100,
-        )
+        self.five = PyTgCalls(self.userbot5)
 
     async def pause_stream(self, chat_id: int):
         assistant = await group_assistant(self, chat_id)
@@ -168,6 +167,7 @@ class Call(PyTgCalls):
 
     async def stop_stream(self, chat_id: int):
         assistant = await group_assistant(self, chat_id)
+        _recently_joined.pop(chat_id, None)
         try:
             await _clear_(chat_id)
             await assistant.leave_group_call(chat_id)
@@ -200,6 +200,7 @@ class Call(PyTgCalls):
                 await self.five.leave_group_call(chat_id)
         except Exception:
             pass
+        _recently_joined.pop(chat_id, None)
         try:
             await _clear_(chat_id)
         except Exception:
@@ -276,6 +277,7 @@ class Call(PyTgCalls):
             pass
         await remove_active_video_chat(chat_id)
         await remove_active_chat(chat_id)
+        _recently_joined.pop(chat_id, None)
         try:
             await assistant.leave_group_call(chat_id)
         except Exception:
@@ -306,6 +308,7 @@ class Call(PyTgCalls):
 
     async def stream_call(self, link):
         assistant = await group_assistant(self, config.LOG_GROUP_ID)
+        _recently_joined[config.LOG_GROUP_ID] = time.time()
         await assistant.join_group_call(
             config.LOG_GROUP_ID,
             _video_stream(link),
@@ -326,7 +329,6 @@ class Call(PyTgCalls):
         language = await get_lang(chat_id)
         _ = get_string(language)
 
-        # ✅ FIXED: clean single branching (no redundant AudioVideoPiped)
         if video:
             stream = _video_stream(link, hq_video=True)
         else:
@@ -338,12 +340,24 @@ class Call(PyTgCalls):
                 stream,
                 stream_type=StreamType().pulse_stream,
             )
+            # 🛡️ Mark join time so false on_left within grace period is ignored
+            _recently_joined[chat_id] = time.time()
+            LOGGER(__name__).info(f"[JOIN_OK] chat={chat_id}")
         except NoActiveGroupCall:
+            LOGGER(__name__).error(f"[JOIN_FAIL] NoActiveGroupCall chat={chat_id}")
             raise AssistantErr(_["call_8"])
         except AlreadyJoinedError:
+            LOGGER(__name__).error(f"[JOIN_FAIL] AlreadyJoined chat={chat_id}")
             raise AssistantErr(_["call_9"])
         except TelegramServerError:
+            LOGGER(__name__).error(f"[JOIN_FAIL] TelegramServerError chat={chat_id}")
             raise AssistantErr(_["call_10"])
+        except Exception as e:
+            LOGGER(__name__).error(
+                f"[JOIN_FAIL] {type(e).__name__}: {e} chat={chat_id}",
+                exc_info=True,
+            )
+            raise AssistantErr(f"Join failed: {type(e).__name__}: {e}")
 
         await add_active_chat(chat_id)
         await music_on(chat_id)
@@ -587,6 +601,9 @@ class Call(PyTgCalls):
             await self.five.start()
 
     async def decorators(self):
+        # ============================================================
+        #  KICKED / VC CLOSED → real leave, stop immediately
+        # ============================================================
         @self.one.on_kicked()
         @self.two.on_kicked()
         @self.three.on_kicked()
@@ -597,14 +614,44 @@ class Call(PyTgCalls):
         @self.three.on_closed_voice_chat()
         @self.four.on_closed_voice_chat()
         @self.five.on_closed_voice_chat()
+        async def stream_kicked_handler(_, chat_id: int):
+            LOGGER(__name__).warning(
+                f"[on_kicked/closed_voice_chat] chat={chat_id}"
+            )
+            _recently_joined.pop(chat_id, None)
+            try:
+                await self.stop_stream(chat_id)
+            except Exception as e:
+                LOGGER(__name__).error(f"stop_stream error: {e}")
+
+        # ============================================================
+        #  ON_LEFT → with grace period guard
+        #  PyTgCalls sometimes fires on_left right after joining.
+        #  Ignore events coming within _RECENT_JOIN_GRACE seconds.
+        # ============================================================
         @self.one.on_left()
         @self.two.on_left()
         @self.three.on_left()
         @self.four.on_left()
         @self.five.on_left()
-        async def stream_services_handler(_, chat_id: int):
-            await self.stop_stream(chat_id)
+        async def stream_left_handler(_, chat_id: int):
+            joined_at = _recently_joined.get(chat_id, 0)
+            elapsed = time.time() - joined_at
+            if joined_at and elapsed < _RECENT_JOIN_GRACE:
+                LOGGER(__name__).info(
+                    f"[on_left] IGNORED (grace {elapsed:.1f}s) chat={chat_id}"
+                )
+                return
+            LOGGER(__name__).warning(f"[on_left] chat={chat_id}")
+            _recently_joined.pop(chat_id, None)
+            try:
+                await self.stop_stream(chat_id)
+            except Exception as e:
+                LOGGER(__name__).error(f"stop_stream error: {e}")
 
+        # ============================================================
+        #  STREAM END → play next track
+        # ============================================================
         @self.one.on_stream_end()
         @self.two.on_stream_end()
         @self.three.on_stream_end()
@@ -613,7 +660,11 @@ class Call(PyTgCalls):
         async def stream_end_handler1(client, update: Update):
             if not isinstance(update, StreamAudioEnded):
                 return
-            await self.change_stream(client, update.chat_id)
+            await asyncio.sleep(1)
+            try:
+                await self.change_stream(client, update.chat_id)
+            except Exception as e:
+                LOGGER(__name__).error(f"change_stream error: {e}")
 
 
 DevSp = Call()
