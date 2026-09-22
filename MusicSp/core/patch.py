@@ -1,5 +1,8 @@
 import json
+import logging
 from typing import Callable, Dict
+
+LOGGER = logging.getLogger(__name__)
 
 def apply_patches():
     try:
@@ -20,7 +23,6 @@ def apply_patches():
             PeerChat,
             UpdateChannel,
             UpdateGroupCall,
-            UpdateGroupCallConnection,
             UpdateGroupCallParticipants,
             UpdateNewChannelMessage,
             UpdateNewMessage,
@@ -34,17 +36,10 @@ def apply_patches():
 
         def patched_pyrogram_client_init(self, cache_duration: int, client: Client):
             self._app: Client = client
-            if VersionManager.version_tuple(
-                pyrogram.__version__,
-            ) > VersionManager.version_tuple(
-                "2.0.0",
-            ):
+            if VersionManager.version_tuple(pyrogram.__version__) > VersionManager.version_tuple("2.0.0"):
                 self._app.send = self._app.invoke
             self._handler: Dict[str, Callable] = {}
-            self._cache: ClientCache = ClientCache(
-                cache_duration,
-                self,
-            )
+            self._cache: ClientCache = ClientCache(cache_duration, self)
 
             @self._app.on_raw_update()
             async def on_update(_, update, __, data2):
@@ -86,15 +81,13 @@ def apply_patches():
                                 if getattr(update.call, "schedule_date", None) is None:
                                     self._cache.set_cache(
                                         chat_id,
-                                        InputGroupCall(
-                                            access_hash=update.call.access_hash,
-                                            id=update.call.id,
-                                        ),
+                                        InputGroupCall(access_hash=update.call.access_hash, id=update.call.id),
                                     )
                             if isinstance(update.call, GroupCallDiscarded):
                                 self._cache.drop_cache(chat_id)
                                 if "CLOSED_HANDLER" in self._handler:
                                     await self._handler["CLOSED_HANDLER"](chat_id)
+                    
                     if isinstance(update, UpdateChannel):
                         chat_id = self.chat_id(update)
                         if isinstance(data2, dict) and len(data2) > 0 and hasattr(update, "channel_id") and update.channel_id in data2:
@@ -102,35 +95,27 @@ def apply_patches():
                                 self._cache.drop_cache(chat_id)
                                 if "KICK_HANDLER" in self._handler:
                                     await self._handler["KICK_HANDLER"](chat_id)
-                    if isinstance(update, (UpdateNewChannelMessage, UpdateNewMessage)):
-                        if hasattr(update, "message") and isinstance(update.message, MessageService):
-                            if isinstance(update.message.action, MessageActionInviteToGroupCall):
-                                if "INVITE_HANDLER" in self._handler:
-                                    await self._handler["INVITE_HANDLER"](update.message.action)
-                            if isinstance(update.message.action, MessageActionChatDeleteUser):
-                                if hasattr(update.message, "peer_id") and isinstance(update.message.peer_id, PeerChat):
-                                    chat_id = self.chat_id(update.message.peer_id)
-                                    if isinstance(data2, dict) and hasattr(update.message.peer_id, "chat_id") and update.message.peer_id.chat_id in data2:
-                                        if isinstance(data2[update.message.peer_id.chat_id], ChatForbidden):
-                                            self._cache.drop_cache(chat_id)
-                                            if "KICK_HANDLER" in self._handler:
-                                                await self._handler["KICK_HANDLER"](chat_id)
+
+                    # BUG FIX: Safely handle LEFT events without triggering false positives
                     if isinstance(data2, dict):
                         for group_id in data2:
                             if isinstance(update, (UpdateNewChannelMessage, UpdateNewMessage)):
                                 if hasattr(update, "message") and isinstance(update.message, MessageService):
                                     if isinstance(data2[group_id], (Channel, Chat)):
                                         chat_id = self.chat_id(data2[group_id])
-                                        if getattr(data2[group_id], "left", False):
+                                        is_left = getattr(data2[group_id], "left", False)
+                                        # Only trigger if genuinely left, ignore system messages that misflag this
+                                        if is_left and getattr(update.message.action, "user_id", None) == self._app.me.id:
                                             self._cache.drop_cache(chat_id)
                                             if "LEFT_HANDLER" in self._handler:
+                                                LOGGER.warning(f"[PATCH] True LEFT event detected for chat {chat_id}")
                                                 await self._handler["LEFT_HANDLER"](chat_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    LOGGER.error(f"[PATCH ERROR] {e}")
 
         PyrogramClient.__init__ = patched_pyrogram_client_init
         PyrogramClient._is_sp_patched = True
-    except Exception:
-        pass
+    except Exception as e:
+        LOGGER.error(f"[PATCH SETUP ERROR] {e}")
 
 apply_patches()
