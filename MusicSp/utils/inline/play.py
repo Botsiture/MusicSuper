@@ -36,7 +36,6 @@ def _progress_bar(played, dur, width=13):
 
     ratio = min(1.0, max(0.0, played_sec / duration_sec))
     pos = min(width - 1, int(round(ratio * (width - 1))))
-    # Patla wala bar Heer jaisa
     return "─" * pos + "●" + "─" * (width - pos - 1)
 
 
@@ -51,15 +50,14 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
             dur = track.get("dur")
 
     rows = []
-    
-    # Progress text for standard fallback (Rich message uses its own progress block)
+
     bar = _progress_bar(played, dur) if played is not None and dur else None
     if bar:
         rows.append(
             [
                 InlineKeyboardButton(
                     text=f"{played}  {bar}  {dur}",
-                    callback_data="GetTimer"
+                    callback_data="GetTimer",
                 )
             ]
         )
@@ -95,38 +93,27 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
 
 
 def stream_markup_timer(_, chat_id, played, dur):
-    return _player_markup(
-        _,
-        chat_id,
-        playing=True,
-        played=played,
-        dur=dur,
-    )
+    return _player_markup(_, chat_id, playing=True, played=played, dur=dur)
 
 
 def stream_markup(_, chat_id, playing=True):
-    return _player_markup(
-        _,
-        chat_id,
-        playing=playing,
-    )
+    return _player_markup(_, chat_id, playing=playing)
 
 
 def _convert_to_rich_buttons(buttons):
-    """Standard InlineKeyboardButton ko Native RichMessageButtons mein convert karta hai."""
+    """Standard InlineKeyboardButton -> Native RichMessageButtons."""
     rich_rows = []
     for row in buttons:
         rich_buttons = []
         for btn in row:
             if btn.callback_data:
-                # Timer button blockquote ke andar dikhega uske liye skip the standard button mapping
                 if btn.callback_data == "GetTimer":
                     continue
                 rich_buttons.append(
                     types.RichMessageButton(
                         text=types.RichTextPlain(text=btn.text),
                         callback_data=btn.callback_data,
-                        style="primary"
+                        style="primary",
                     )
                 )
             elif btn.url:
@@ -134,22 +121,18 @@ def _convert_to_rich_buttons(buttons):
                     types.RichMessageButton(
                         text=types.RichTextPlain(text=btn.text),
                         url=btn.url,
-                        style="primary"
+                        style="primary",
                     )
                 )
         if rich_buttons:
             rich_rows.append(
-                types.InputRichBlockButtons(
-                    buttons=rich_buttons,
-                    align="center"
-                )
+                types.InputRichBlockButtons(buttons=rich_buttons, align="center")
             )
     return rich_rows
 
 
 async def refresh_player_markup(_, chat_id, playing=True):
     current = db.get(chat_id) or []
-
     if not current:
         return
     mystic = current[0].get("mystic")
@@ -175,16 +158,15 @@ async def refresh_player_markup(_, chat_id, playing=True):
                     new_blocks.append(
                         types.InputRichBlockPhoto(
                             photo=saved_photo,
-                            caption=types.RichTextPlain(text=saved_caption)
+                            caption=types.RichTextPlain(text=saved_caption),
                         )
                     )
 
                 bar = _progress_bar(played, dur)
-                # Adding progress text cleanly as a separate text block
                 new_blocks.append(
                     types.InputRichBlockProgressBar(
-                        progress=0,  # Or logic to calc 0-100
-                        text=types.RichTextPlain(text=f"{played}  {bar}  {dur}")
+                        progress=0,
+                        text=types.RichTextPlain(text=f"{played}  {bar}  {dur}"),
                     )
                 )
 
@@ -193,11 +175,11 @@ async def refresh_player_markup(_, chat_id, playing=True):
                 await mystic.edit_rich_message(
                     rich_message=types.InputRichMessage(blocks=new_blocks)
                 )
-                return  # Success
+                return
             except Exception as rich_err:
                 print(f"Rich edit failed, falling back: {rich_err}")
 
-        # 2. Fallback if edit_rich_message isn't present
+        # 2. Fallback
         await mystic.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup(buttons)
         )
