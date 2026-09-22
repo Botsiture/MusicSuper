@@ -28,7 +28,7 @@ heroku3==5.2.1
 # --- Telegram & Media libs ---
 kurigram==2.2.26
 py-tgcalls==0.9.7
-ntgcalls==0.9.7
+ntgcalls==1.0.7
 spotipy==2.24.0
 unidecode==1.3.8
 
