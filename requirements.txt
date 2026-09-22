@@ -5,7 +5,7 @@
 
 # --- Core async & system ---
 aiofiles==24.1.0
-aiohttp==3.10.11
+aiohttp>=3.9.0,<3.11.0
 beautifulsoup4==4.12.3
 dnspython==2.7.0
 ffmpeg-python==0.2.0
@@ -39,5 +39,5 @@ speedtest-cli==2.1.3
 # --- YouTube & streaming ---
 yt-dlp==2024.12.13
 youtube-search-python==1.6.6
-py-yt-search==0.8.0
+py-yt-search==0.7.5
 httpx[http2]==0.27.2
