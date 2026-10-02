@@ -58,13 +58,13 @@ async def perform_speed_change(chat_id, speed_type, mention="", callback_query=N
             playing[0]["is_slowed"] = False
 
     if speed_type == "slow":
-        speed_val = "0.8"  # Slowed down speed
+        speed_val = "0.8"
         txt = f"➻ sʟᴏᴡᴇᴅ ʀᴇᴠᴇʀʙ ᴇɴᴀʙʟᴇᴅ 🎄\n│ \n└ʙʏ : {mention} 🥀"
     elif speed_type == "sped":
-        speed_val = "1.2"  # Sped up speed
+        speed_val = "1.2"
         txt = f"➻ sᴘᴇᴅ ᴜᴘ ᴇɴᴀʙʟᴇᴅ 🎄\n│ \n└ʙʏ : {mention} 🥀"
     else:
-        speed_val = "1.0"  # Normal speed
+        speed_val = "1.0"
         txt = f"➻ ɴᴏʀᴍᴀʟ sᴘᴇᴇᴅ ʀᴇsᴛᴏʀᴇᴅ 🎄\n│ \n└ʙʏ : {mention} 🥀"
 
     try:
