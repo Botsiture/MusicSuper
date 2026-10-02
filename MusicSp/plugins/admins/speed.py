@@ -13,6 +13,88 @@ from config import BANNED_USERS, adminlist
 checker = []
 
 
+async def perform_speed_change(chat_id, speed_type, mention="", callback_query=None):
+    playing = db.get(chat_id)
+    if not playing:
+        if callback_query:
+            return await callback_query.answer("Queue is empty!", show_alert=True)
+        return
+
+    duration_seconds = int(playing[0]["seconds"])
+    if duration_seconds == 0:
+        if callback_query:
+            return await callback_query.answer("Live stream speed cannot be changed!", show_alert=True)
+        return
+
+    file_path = playing[0]["file"]
+    if "downloads" not in file_path:
+        if callback_query:
+            return await callback_query.answer("Only downloaded files can be modified!", show_alert=True)
+        return
+
+    if chat_id in checker:
+        if callback_query:
+            return await callback_query.answer("Please wait, previous speed change is in progress!", show_alert=True)
+        return
+    else:
+        checker.append(chat_id)
+
+    is_slowed = playing[0].get("is_slowed", False)
+    is_sped = playing[0].get("is_sped", False)
+
+    if speed_type == "slow":
+        if is_slowed:
+            speed_type = "normal"
+            playing[0]["is_slowed"] = False
+        else:
+            playing[0]["is_slowed"] = True
+            playing[0]["is_sped"] = False
+    elif speed_type == "sped":
+        if is_sped:
+            speed_type = "normal"
+            playing[0]["is_sped"] = False
+        else:
+            playing[0]["is_sped"] = True
+            playing[0]["is_slowed"] = False
+
+    if speed_type == "slow":
+        speed_val = "0.8"  # Slowed down speed
+        txt = f"➻ sʟᴏᴡᴇᴅ ʀᴇᴠᴇʀʙ ᴇɴᴀʙʟᴇᴅ 🎄\n│ \n└ʙʏ : {mention} 🥀"
+    elif speed_type == "sped":
+        speed_val = "1.2"  # Sped up speed
+        txt = f"➻ sᴘᴇᴅ ᴜᴘ ᴇɴᴀʙʟᴇᴅ 🎄\n│ \n└ʙʏ : {mention} 🥀"
+    else:
+        speed_val = "1.0"  # Normal speed
+        txt = f"➻ ɴᴏʀᴍᴀʟ sᴘᴇᴇᴅ ʀᴇsᴛᴏʀᴇᴅ 🎄\n│ \n└ʙʏ : {mention} 🥀"
+
+    try:
+        if callback_query:
+            await callback_query.answer("Changing speed...", show_alert=False)
+
+        await DevSp.speedup_stream(
+            chat_id,
+            file_path,
+            speed_val,
+            playing,
+        )
+        
+        if chat_id in checker:
+            checker.remove(chat_id)
+            
+        if callback_query:
+            await callback_query.answer(txt, show_alert=True)
+            from MusicSp.utils.inline import refresh_player_markup
+            await refresh_player_markup(None, chat_id)
+        else:
+            await callback_query.message.reply_text(text=txt, reply_markup=close_markup(_))
+    except Exception:
+        if chat_id in checker:
+            checker.remove(chat_id)
+        if callback_query:
+            return await callback_query.answer("Failed to change speed!", show_alert=True)
+        return
+
+
 @app.on_message(
     filters.command(["cspeed", "speed", "cslow", "slow", "playback", "cplayback"])
     & filters.group
@@ -54,59 +136,5 @@ async def del_back_playlist(client, CallbackQuery, _):
             else:
                 if CallbackQuery.from_user.id not in admins:
                     return await CallbackQuery.answer(_["admin_14"], show_alert=True)
-    playing = db.get(chat_id)
-    if not playing:
-        return await CallbackQuery.answer(_["queue_2"], show_alert=True)
-    duration_seconds = int(playing[0]["seconds"])
-    if duration_seconds == 0:
-        return await CallbackQuery.answer(_["admin_27"], show_alert=True)
-    file_path = playing[0]["file"]
-    if "downloads" not in file_path:
-        return await CallbackQuery.answer(_["admin_27"], show_alert=True)
-    checkspeed = (playing[0]).get("speed")
-    if checkspeed:
-        if str(checkspeed) == str(speed):
-            if str(speed) == str("1.0"):
-                return await CallbackQuery.answer(
-                    _["admin_29"],
-                    show_alert=True,
-                )
-    else:
-        if str(speed) == str("1.0"):
-            return await CallbackQuery.answer(
-                _["admin_29"],
-                show_alert=True,
-            )
-    if chat_id in checker:
-        return await CallbackQuery.answer(
-            _["admin_30"],
-            show_alert=True,
-        )
-    else:
-        checker.append(chat_id)
-    try:
-        await CallbackQuery.answer(
-            _["admin_31"],
-        )
-    except:
-        pass
-    mystic = await CallbackQuery.edit_message_text(
-        text=_["admin_32"].format(CallbackQuery.from_user.mention),
-    )
-    try:
-        await DevSp.speedup_stream(
-            chat_id,
-            file_path,
-            speed,
-            playing,
-        )
-    except:
-        if chat_id in checker:
-            checker.remove(chat_id)
-        return await mystic.edit_text(_["admin_33"], reply_markup=close_markup(_))
-    if chat_id in checker:
-        checker.remove(chat_id)
-    await mystic.edit_text(
-        text=_["admin_34"].format(speed, CallbackQuery.from_user.mention),
-        reply_markup=close_markup(_),
-    )
+    
+    await perform_speed_change(chat_id, speed, CallbackQuery.from_user.mention, CallbackQuery)
