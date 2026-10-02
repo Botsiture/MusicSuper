@@ -53,9 +53,13 @@ autoend = {}
 counter = {}
 
 _recently_joined: dict = {}
-_RECENT_JOIN_GRACE = 15  # Badha diya gaya hai safety ke liye
+_RECENT_JOIN_GRACE = 15
 
-# SMOOTH_FFMPEG ko simple kiya gaya hai jisse random buffer close na ho
+# Autoplay: per-chat failed vidids (to avoid infinite retry of the same song)
+_autoplay_failed: dict = {}
+_AUTOPLAY_MAX_ATTEMPTS = 5
+
+# SMOOTH_FFMPEG
 SMOOTH_FFMPEG = "-nostdin"
 
 HQ_AUDIO = HighQualityAudio()
@@ -70,6 +74,13 @@ def _file_ok(path) -> bool:
         return os.path.isfile(path) and os.path.getsize(path) >= 1024
     except Exception:
         return False
+
+
+def _clear_autoplay_failed(chat_id):
+    try:
+        _autoplay_failed.pop(chat_id, None)
+    except Exception:
+        pass
 
 
 def _audio_stream(file_path, extra_ffmpeg=None):
@@ -153,6 +164,7 @@ class Call(PyTgCalls):
 
     async def stop_stream(self, chat_id: int):
         _recently_joined.pop(chat_id, None)
+        _clear_autoplay_failed(chat_id)
         try:
             assistant = await group_assistant(self, chat_id)
             if assistant:
@@ -172,6 +184,7 @@ class Call(PyTgCalls):
             except Exception:
                 pass
         _recently_joined.pop(chat_id, None)
+        _clear_autoplay_failed(chat_id)
         try:
             await _clear_(chat_id)
         except Exception:
@@ -187,6 +200,7 @@ class Call(PyTgCalls):
         await remove_active_video_chat(chat_id)
         await remove_active_chat(chat_id)
         _recently_joined.pop(chat_id, None)
+        _clear_autoplay_failed(chat_id)
         try:
             assistant = await group_assistant(self, chat_id)
             await assistant.leave_group_call(chat_id)
@@ -293,7 +307,6 @@ class Call(PyTgCalls):
 
         stream = _video_stream(link, hq_video=True) if video else _audio_stream(link)
 
-        # Bug Fix: Timestamp ko call join hone se pehle add kiya
         _recently_joined[chat_id] = time.time()
 
         try:
@@ -317,6 +330,9 @@ class Call(PyTgCalls):
                 )
                 raise AssistantErr(f"Join failed: {e}")
 
+        # Reset autoplay failed tracker for the new session
+        _clear_autoplay_failed(chat_id)
+
         await add_active_chat(chat_id)
         await music_on(chat_id)
         if video:
@@ -333,6 +349,7 @@ class Call(PyTgCalls):
     async def _autoplay_fetch(self, chat_id, current_track):
         """
         Autoplay: Search a similar song on YouTube and add it to the queue.
+        Skips songs that already failed to download in this session.
         Returns True if a similar song was successfully added.
         """
         try:
@@ -342,56 +359,79 @@ class Call(PyTgCalls):
                 LOGGER(__name__).warning("[AUTOPLAY] No title in current track")
                 return False
 
-            # Try different search indexes to find a DIFFERENT song
-            for idx in [1, 2, 3, 4, 0, 5]:
-                try:
-                    result = await YouTube.slider(title, idx)
-                    if (
-                        not result
-                        or not isinstance(result, (list, tuple))
-                        or len(result) < 4
-                    ):
+            failed = _autoplay_failed.setdefault(chat_id, set())
+
+            # Build multiple search terms for variety
+            search_terms = [title]
+            words = title.split()
+            if len(words) > 3:
+                search_terms.append(" ".join(words[:3]))
+                search_terms.append(" ".join(words[-3:]))
+            if len(words) > 5:
+                search_terms.append(" ".join(words[2:5]))
+
+            # Dedupe search terms
+            seen_terms = set()
+            unique_terms = []
+            for t in search_terms:
+                t = t.strip()
+                if t and t not in seen_terms:
+                    seen_terms.add(t)
+                    unique_terms.append(t)
+
+            # Try multiple search strategies and indexes
+            for term in unique_terms:
+                for idx in [1, 2, 3, 4, 5, 6, 7, 8, 0, 9]:
+                    try:
+                        result = await YouTube.slider(term, idx)
+                        if (
+                            not result
+                            or not isinstance(result, (list, tuple))
+                            or len(result) < 4
+                        ):
+                            continue
+
+                        t, d_min, _thumb, vid_id = result
+
+                        # Validate vid_id
+                        if not vid_id or not isinstance(vid_id, str) or len(vid_id) < 5:
+                            continue
+                        if vid_id == current_vidid:
+                            continue
+                        if vid_id in failed:
+                            continue
+
+                        await put_queue(
+                            chat_id,
+                            chat_id,
+                            f"vid_{vid_id}",
+                            t,
+                            d_min,
+                            current_track.get("by", "Autoplay"),
+                            vid_id,
+                            current_track.get("user_id"),
+                            "audio",
+                        )
+
+                        # Preserve autoplay flag on newly added track
+                        if db.get(chat_id) and len(db[chat_id]) > 0:
+                            db[chat_id][-1]["autoplay"] = True
+
+                        LOGGER(__name__).info(
+                            f"[AUTOPLAY] Queued similar song: {t} ({vid_id})"
+                        )
+                        return True
+                    except Exception as e:
+                        LOGGER(__name__).warning(
+                            f"[AUTOPLAY] term='{term}' idx={idx} failed: {e}"
+                        )
                         continue
-
-                    t, d_min, _thumb, vid_id = result
-
-                    # Validate vid_id
-                    if not vid_id or not isinstance(vid_id, str) or len(vid_id) < 5:
-                        continue
-                    if vid_id == current_vidid:
-                        continue
-
-                    await put_queue(
-                        chat_id,
-                        chat_id,
-                        f"vid_{vid_id}",
-                        t,
-                        d_min,
-                        current_track.get("by", "Autoplay"),
-                        vid_id,
-                        current_track.get("user_id"),
-                        "audio",
-                    )
-
-                    # Preserve autoplay flag on the newly added track
-                    if db.get(chat_id) and len(db[chat_id]) > 0:
-                        db[chat_id][-1]["autoplay"] = True
-
-                    LOGGER(__name__).info(
-                        f"[AUTOPLAY] Added similar song: {t} ({vid_id})"
-                    )
-                    return True
-                except Exception as e:
-                    LOGGER(__name__).warning(
-                        f"[AUTOPLAY] idx={idx} failed: {e}"
-                    )
-                    continue
             return False
         except Exception as e:
             LOGGER(__name__).error(f"[AUTOPLAY] fatal error: {e}")
             return False
 
-    async def change_stream(self, client, chat_id):
+    async def change_stream(self, client, chat_id, status_msg=None):
         check = db.get(chat_id)
         if not check:
             try:
@@ -424,12 +464,13 @@ class Call(PyTgCalls):
                             f"[AUTOPLAY] No similar song found for chat {chat_id}"
                         )
                         await _clear_(chat_id)
+                        _clear_autoplay_failed(chat_id)
                         return await client.leave_group_call(chat_id)
                 else:
                     await _clear_(chat_id)
+                    _clear_autoplay_failed(chat_id)
                     return await client.leave_group_call(chat_id)
             else:
-                # Propagate autoplay flag to the next queued track
                 if popped_track and popped_track.get("autoplay"):
                     db[chat_id][0]["autoplay"] = True
             # --- END AUTOPLAY LOGIC ---
@@ -438,13 +479,15 @@ class Call(PyTgCalls):
             LOGGER(__name__).error(f"Error in auto_clean or loop update: {e}")
             try:
                 await _clear_(chat_id)
+                _clear_autoplay_failed(chat_id)
                 return await client.leave_group_call(chat_id)
             except Exception:
                 return
 
-        # Safety check: queue might be empty or file might be None
+        # Safety check
         if not db.get(chat_id):
             await _clear_(chat_id)
+            _clear_autoplay_failed(chat_id)
             return await client.leave_group_call(chat_id)
 
         queued = db[chat_id][0].get("file")
@@ -457,8 +500,9 @@ class Call(PyTgCalls):
             except Exception:
                 pass
             if db.get(chat_id):
-                return await self.change_stream(client, chat_id)
+                return await self.change_stream(client, chat_id, status_msg=status_msg)
             await _clear_(chat_id)
+            _clear_autoplay_failed(chat_id)
             return await client.leave_group_call(chat_id)
 
         language = await get_lang(chat_id)
@@ -507,7 +551,18 @@ class Call(PyTgCalls):
 
         # --- VIDEO / YOUTUBE DOWNLOAD TRACK ---
         elif "vid_" in queued:
-            mystic = await app.send_message(original_chat_id, _["call_7"])
+            # Reuse status_msg if provided (retry), else create new
+            if status_msg:
+                mystic = status_msg
+                try:
+                    await mystic.edit_text(
+                        _["call_7"], disable_web_page_preview=True
+                    )
+                except Exception:
+                    pass
+            else:
+                mystic = await app.send_message(original_chat_id, _["call_7"])
+
             file_path = None
             try:
                 file_path, direct = await YouTube.download(
@@ -518,7 +573,7 @@ class Call(PyTgCalls):
                 )
             except Exception as e:
                 LOGGER(__name__).error(
-                    f"[change_stream] download error for {videoid}: {e}"
+                    f"[change_stream] download exception for {videoid}: {e}"
                 )
 
             # BUG FIX: Check if download actually succeeded
@@ -526,9 +581,15 @@ class Call(PyTgCalls):
                 LOGGER(__name__).error(
                     f"[change_stream] download returned None for {videoid}"
                 )
+
+                # Track this vidid as failed to prevent retry loops
+                _autoplay_failed.setdefault(chat_id, set()).add(videoid)
+
+                # Show error in the SAME message (no new spam)
                 try:
                     await mystic.edit_text(
-                        _["call_6"], disable_web_page_preview=True
+                        "❌ ᴅᴏᴡɴʟᴏᴀᴅ ғᴀɪʟᴇᴅ, ᴛʀʏɪɴɢ ᴀɴᴏᴛʜᴇʀ ᴛʀᴀᴄᴋ...",
+                        disable_web_page_preview=True,
                     )
                 except Exception:
                     pass
@@ -539,25 +600,49 @@ class Call(PyTgCalls):
                 except Exception:
                     pass
 
-                # Try next track in queue
+                # Try next track in queue (reuse same message)
                 if db.get(chat_id):
-                    return await self.change_stream(client, chat_id)
+                    return await self.change_stream(
+                        client, chat_id, status_msg=mystic
+                    )
 
-                # If queue is empty and autoplay was on, try fetching another
+                # Autoplay retry (limited attempts, reuse same message)
                 if popped_track and popped_track.get("autoplay"):
-                    fetched = await self._autoplay_fetch(chat_id, popped_track)
-                    if fetched:
-                        return await self.change_stream(client, chat_id)
+                    for attempt in range(_AUTOPLAY_MAX_ATTEMPTS):
+                        fetched = await self._autoplay_fetch(chat_id, popped_track)
+                        if fetched:
+                            return await self.change_stream(
+                                client, chat_id, status_msg=mystic
+                            )
+                        LOGGER(__name__).info(
+                            f"[AUTOPLAY] Attempt {attempt + 1}/{_AUTOPLAY_MAX_ATTEMPTS} "
+                            f"failed to find new track for chat {chat_id}"
+                        )
+
+                # Give up — show final message in same msg
+                try:
+                    await mystic.edit_text(
+                        "ᴀʟʟ ᴛʀᴀᴄᴋs ғᴀɪʟᴇᴅ ᴛᴏ ᴅᴏᴡɴʟᴏᴀᴅ. sᴛᴏᴘᴘɪɴɢ ᴀᴜᴛᴏᴘʟᴀʏ.",
+                        disable_web_page_preview=True,
+                    )
+                except Exception:
+                    pass
 
                 await _clear_(chat_id)
+                _clear_autoplay_failed(chat_id)
                 return await client.leave_group_call(chat_id)
 
+            # Success — proceed normally
             stream = _video_stream(file_path, hq_video=True) if video else _audio_stream(file_path)
             try:
                 await client.change_stream(chat_id, stream)
             except Exception as e:
                 LOGGER(__name__).error(f"[change_stream] change_stream error: {e}")
                 return await app.send_message(original_chat_id, text=_["call_6"])
+
+            # Clear autoplay failed on success so next cycle is fresh
+            _clear_autoplay_failed(chat_id)
+
             img = await gen_thumb(videoid)
             button = stream_markup(_, chat_id)
             try:
@@ -585,6 +670,9 @@ class Call(PyTgCalls):
                 await client.change_stream(chat_id, stream)
             except Exception:
                 return await app.send_message(original_chat_id, text=_["call_6"])
+
+            # Clear autoplay failed on success
+            _clear_autoplay_failed(chat_id)
 
             button = stream_markup(_, chat_id)
             if videoid == "telegram":
@@ -666,12 +754,12 @@ class Call(PyTgCalls):
         async def stream_kicked_handler(_, chat_id: int):
             LOGGER(__name__).warning(f"[on_kicked/closed_voice_chat] chat={chat_id}")
             _recently_joined.pop(chat_id, None)
+            _clear_autoplay_failed(chat_id)
             try:
                 await self.stop_stream(chat_id)
             except Exception as e:
                 LOGGER(__name__).error(f"stop_stream error: {e}")
 
-        # BUG FIX: Safely verify on_left event before destroying the VC state
         @self.one.on_left()
         @self.two.on_left()
         @self.three.on_left()
@@ -697,12 +785,12 @@ class Call(PyTgCalls):
                 return
 
             _recently_joined.pop(chat_id, None)
+            _clear_autoplay_failed(chat_id)
             try:
                 await self.stop_stream(chat_id)
             except Exception as e:
                 LOGGER(__name__).error(f"stop_stream error: {e}")
 
-        # BUG FIX: StreamVideoEnded added so video doesn't break queue
         @self.one.on_stream_end()
         @self.two.on_stream_end()
         @self.three.on_stream_end()
@@ -729,6 +817,7 @@ class Call(PyTgCalls):
                 )
                 try:
                     await _clear_(chat_id)
+                    _clear_autoplay_failed(chat_id)
                     return await client.leave_group_call(chat_id)
                 except Exception:
                     return
