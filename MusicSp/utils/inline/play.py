@@ -64,59 +64,56 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
             ]
         )
 
-    # 2. Main Controls (Replay, Pause/Resume, Skip) -> Symbols only
+    # 2. Main Controls (5 Buttons in One Row)
     rows.append(
         [
             InlineKeyboardButton(
-                text="⟲",
+                text="▷",
+                callback_data=f"ADMIN Resume|{chat_id}",
+            ),
+            InlineKeyboardButton(
+                text="II",
+                callback_data=f"ADMIN Pause|{chat_id}",
+            ),
+            InlineKeyboardButton(
+                text="↻",
                 callback_data=f"ADMIN Replay|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="⏸" if playing else "⏵",
-                callback_data=f"ADMIN {'Pause' if playing else 'Resume'}|{chat_id}",
+                text="‣‣I",
+                callback_data=f"ADMIN Skip|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="⏭",
-                callback_data=f"ADMIN Skip|{chat_id}",
+                text="▢",
+                callback_data=f"ADMIN End|{chat_id}",
             ),
         ]
     )
 
-    # 3. New Row: 20s Back, Settings, 20s Forward -> Symbols only
+    # 3. Seek and Settings (3 Buttons)
     rows.append(
         [
             InlineKeyboardButton(
-                text="⏪",
+                text="⋞ 𝟤𝟢s",
                 callback_data=f"ADMIN SeekBack|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="⚙",
+                text="❊",
                 callback_data=f"ADMIN Settings|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="⏩",
+                text="𝟤𝟢s ⋟",
                 callback_data=f"ADMIN SeekFwd|{chat_id}",
             ),
         ]
     )
 
-    # 4. Queue Button
-    queue_count = max(0, len(current) - 1)
-    rows.append(
-        [
-            InlineKeyboardButton(
-                text=f"≡ {queue_count}",
-                callback_data=f"GetQueued g|{videoid}",
-            )
-        ]
-    )
-
-    # 5. Close Button
+    # 4. Close Button
     if user_id:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="✕",
+                    text="ᴄʟᴏsᴇ",
                     callback_data=f"forceclose {videoid}|{user_id}",
                 )
             ]
@@ -125,32 +122,68 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
     return rows
 
 
-def _settings_markup(_, chat_id):
-    """Settings Sub-Menu with Slowed, Sped Up, Autoplay, and Back buttons."""
-    rows = [
+def _settings_markup(_, chat_id, played=None, dur=None):
+    """Settings Sub-Menu with Progress Bar"""
+    current = db.get(chat_id) or []
+    track = current[0] if current else {}
+    
+    if played is None:
+        played = seconds_to_min(track.get("played", 0))
+    if dur is None:
+        dur = track.get("dur")
+
+    is_slowed = track.get("is_slowed", False)
+    is_sped = track.get("is_sped", False)
+    autoplay = track.get("autoplay", False)
+
+    # Text Update Logic
+    slow_text = "sʟᴏᴡᴇᴅ ⎋" if is_slowed else "sʟᴏᴡᴇᴅ"
+    sped_text = "sᴘᴇᴅᴜᴘ ⎋" if is_sped else "sᴘᴇᴅᴜᴘ"
+    auto_text = "ᴀᴜᴛᴏᴘʟᴀʏ : ᴏɴ" if autoplay else "ᴀᴜᴛᴏᴘʟᴀʏ : ᴏғғ"
+
+    rows = []
+
+    # 1. Progress Bar in Settings
+    bar = _progress_bar(played, dur) if played is not None and dur else None
+    if bar:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{played} {bar} {dur}",
+                    callback_data="GetTimer",
+                )
+            ]
+        )
+
+    # 2. Settings Buttons
+    rows.append(
         [
             InlineKeyboardButton(
-                text="Slowed Reverb",
+                text=slow_text,
                 callback_data=f"ADMIN ToggleSlow|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="Sped Up",
+                text=sped_text,
                 callback_data=f"ADMIN ToggleSped|{chat_id}",
             ),
-        ],
+        ]
+    )
+    rows.append(
         [
             InlineKeyboardButton(
-                text="Autoplay",
+                text=auto_text,
                 callback_data=f"ADMIN ToggleAutoplay|{chat_id}",
             )
-        ],
+        ]
+    )
+    rows.append(
         [
             InlineKeyboardButton(
-                text="↩ Back",
+                text="⟲ ʙᴀᴄᴋ",
                 callback_data=f"ADMIN SettingsBack|{chat_id}",
             )
-        ],
-    ]
+        ]
+    )
     return rows
 
 
