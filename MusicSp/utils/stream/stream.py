@@ -1,5 +1,5 @@
 import os
-from random import randint
+import random
 from typing import Union
 
 from pyrogram.types import InlineKeyboardMarkup
@@ -8,12 +8,89 @@ import config
 from MusicSp import Carbon, YouTube, app
 from MusicSp.core.call import DevSp
 from MusicSp.misc import db
-from MusicSp.utils.database import add_active_video_chat, is_active_chat
+from MusicSp.utils.database import add_active_video_chat, is_active_chat, get_lang
 from MusicSp.utils.exceptions import AssistantErr
 from MusicSp.utils.inline import aq_markup, close_markup, stream_markup
 from MusicSp.utils.pastebin import DevSpBin
 from MusicSp.utils.stream.queue import put_queue, put_queue_index
 from MusicSp.utils.thumbnails import gen_thumb
+from strings import get_string
+
+
+async def autoplay_next_song(client, chat_id):
+    """
+    Autoplay logic: Search for a similar song and play it when the current one ends.
+    """
+    playing = db.get(chat_id)
+    if not playing:
+        return
+
+    track = playing[0]
+    if not track.get("autoplay"):
+        return
+
+    vidid = track.get("vidid")
+    if not vidid or vidid in ["telegram", "soundcloud", "index_url"]:
+        return  # Autoplay only works for YouTube/Searchable tracks
+
+    try:
+        query = track.get("title")
+        if not query:
+            return
+
+        # Get language strings for the new stream
+        try:
+            language = await get_lang(chat_id)
+            _ = get_string(language)
+        except:
+            _ = get_string("en")
+
+        # Search for similar songs
+        # Assuming YouTube.slider returns a list of dictionaries with 'vidid', 'title', 'duration_min'
+        results = await YouTube.slider(query, 0)  # 0 means random/first page
+        if not results:
+            print("Autoplay: No similar songs found.")
+            return
+
+        # Pick a random similar song
+        next_track = random.choice(results)
+        next_vidid = next_track.get("vidid")
+
+        # Send a message that autoplay is starting
+        mystic = await app.send_message(
+            chat_id=chat_id,
+            text="ᴀᴜᴛᴏᴘʟᴀʏɪɴɢ ɴᴇxᴛ sᴏɴɢ...",
+        )
+
+        # Download next track
+        file_path, direct = await YouTube.download(
+            next_vidid, mystic, videoid=True, video=False
+        )
+
+        # Prepare details for the stream
+        details = {
+            "title": next_track.get("title"),
+            "link": f"https://youtu.be/{next_vidid}",
+            "path": file_path,
+            "dur": next_track.get("duration_min"),
+            "vidid": next_vidid,
+            "streamtype": "youtube",
+        }
+
+        # Start the stream
+        await stream(
+            _,
+            mystic,
+            track.get("user_id"),
+            details,
+            chat_id,
+            track.get("by"),
+            chat_id,  # original_chat_id
+            streamtype="youtube",
+            forceplay=True,
+        )
+    except Exception as e:
+        print(f"Autoplay Error: {e}")
 
 
 async def stream(
@@ -33,7 +110,7 @@ async def stream(
         return
     if forceplay:
         await DevSp.force_stop_stream(chat_id)
-        
+
     if streamtype == "playlist":
         msg = f"{_['play_19']}\n\n"
         count = 0
@@ -114,7 +191,7 @@ async def stream(
                     photo=img,
                     caption=caption,
                     reply_markup=InlineKeyboardMarkup(button),
-                    has_spoiler=True
+                    has_spoiler=True,
                 )
                 db[chat_id][0]["mystic"] = run
                 db[chat_id][0]["markup"] = "stream"
@@ -127,14 +204,14 @@ async def stream(
                 car = os.linesep.join(msg.split(os.linesep)[:17])
             else:
                 car = msg
-            carbon = await Carbon.generate(car, randint(100, 10000000))
+            carbon = await Carbon.generate(car, random.randint(100, 10000000))
             upl = close_markup(_)
             return await app.send_photo(
                 original_chat_id,
                 photo=carbon,
                 caption=_["play_21"].format(position, link),
                 reply_markup=upl,
-                has_spoiler=True
+                has_spoiler=True,
             )
 
     elif streamtype == "youtube":
@@ -147,8 +224,11 @@ async def stream(
 
         current_queue = db.get(chat_id)
         if current_queue is not None and len(current_queue) >= 10:
-            return await app.send_message(original_chat_id, "You can't add more than 10 songs to the queue.")
-            
+            return await app.send_message(
+                original_chat_id,
+                "You can't add more than 10 songs to the queue.",
+            )
+
         try:
             file_path, direct = await YouTube.download(
                 vidid, mystic, videoid=True, video=status
@@ -157,7 +237,7 @@ async def stream(
             raise AssistantErr(_["play_14"])
         if not file_path:
             raise AssistantErr(_["play_14"])
-            
+
         if await is_active_chat(chat_id):
             await put_queue(
                 chat_id,
@@ -174,7 +254,9 @@ async def stream(
             button = aq_markup(_, chat_id)
             await app.send_message(
                 chat_id=original_chat_id,
-                text=_["queue_4"].format(position, title[:27], duration_min, user_name),
+                text=_["queue_4"].format(
+                    position, title[:27], duration_min, user_name
+                ),
                 reply_markup=InlineKeyboardMarkup(button),
             )
         else:
@@ -212,7 +294,7 @@ async def stream(
                 photo=img,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
-                has_spoiler=True
+                has_spoiler=True,
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "stream"
@@ -221,7 +303,7 @@ async def stream(
         file_path = result["filepath"]
         title = result["title"]
         duration_min = result["duration_min"]
-        
+
         if await is_active_chat(chat_id):
             await put_queue(
                 chat_id,
@@ -238,7 +320,9 @@ async def stream(
             button = aq_markup(_, chat_id)
             await app.send_message(
                 chat_id=original_chat_id,
-                text=_["queue_4"].format(position, title[:27], duration_min, user_name),
+                text=_["queue_4"].format(
+                    position, title[:27], duration_min, user_name
+                ),
                 reply_markup=InlineKeyboardMarkup(button),
             )
         else:
@@ -266,7 +350,7 @@ async def stream(
                 photo=config.SOUNCLOUD_IMG_URL,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
-                has_spoiler=True
+                has_spoiler=True,
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
@@ -277,7 +361,7 @@ async def stream(
         title = (result["title"]).title()
         duration_min = result["dur"]
         status = True if video else None
-        
+
         if await is_active_chat(chat_id):
             await put_queue(
                 chat_id,
@@ -294,7 +378,9 @@ async def stream(
             button = aq_markup(_, chat_id)
             await app.send_message(
                 chat_id=original_chat_id,
-                text=_["queue_4"].format(position, title[:27], duration_min, user_name),
+                text=_["queue_4"].format(
+                    position, title[:27], duration_min, user_name
+                ),
                 reply_markup=InlineKeyboardMarkup(button),
             )
         else:
@@ -323,7 +409,7 @@ async def stream(
                 photo=photo,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
-                has_spoiler=True
+                has_spoiler=True,
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
@@ -335,7 +421,7 @@ async def stream(
         thumbnail = result["thumb"]
         duration_min = "Live Track"
         status = True if video else None
-        
+
         if await is_active_chat(chat_id):
             await put_queue(
                 chat_id,
@@ -352,7 +438,9 @@ async def stream(
             button = aq_markup(_, chat_id)
             await app.send_message(
                 chat_id=original_chat_id,
-                text=_["queue_4"].format(position, title[:27], duration_min, user_name),
+                text=_["queue_4"].format(
+                    position, title[:27], duration_min, user_name
+                ),
                 reply_markup=InlineKeyboardMarkup(button),
             )
         else:
@@ -393,7 +481,7 @@ async def stream(
                 photo=img,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
-                has_spoiler=True
+                has_spoiler=True,
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
@@ -402,7 +490,7 @@ async def stream(
         link = result
         title = "ɪɴᴅᴇx ᴏʀ ᴍ3ᴜ8 ʟɪɴᴋ"
         duration_min = "00:00"
-        
+
         if await is_active_chat(chat_id):
             await put_queue_index(
                 chat_id,
@@ -417,7 +505,9 @@ async def stream(
             position = len(db.get(chat_id)) - 1
             button = aq_markup(_, chat_id)
             await mystic.edit_text(
-                text=_["queue_4"].format(position, title[:27], duration_min, user_name),
+                text=_["queue_4"].format(
+                    position, title[:27], duration_min, user_name
+                ),
                 reply_markup=InlineKeyboardMarkup(button),
             )
         else:
@@ -447,7 +537,7 @@ async def stream(
                 photo=config.STREAM_IMG_URL,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(button),
-                has_spoiler=True
+                has_spoiler=True,
             )
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
