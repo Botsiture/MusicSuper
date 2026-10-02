@@ -68,15 +68,15 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
     rows.append(
         [
             InlineKeyboardButton(
-                text="⟲",  # Replay symbol
+                text="⟲",
                 callback_data=f"ADMIN Replay|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="⏸" if playing else "⏵",  # Pause / Play symbol
+                text="⏸" if playing else "⏵",
                 callback_data=f"ADMIN {'Pause' if playing else 'Resume'}|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="⏭",  # Skip symbol
+                text="⏭",
                 callback_data=f"ADMIN Skip|{chat_id}",
             ),
         ]
@@ -86,15 +86,15 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
     rows.append(
         [
             InlineKeyboardButton(
-                text="⏪",  # Seek backward 20s
+                text="⏪",
                 callback_data=f"ADMIN SeekBack|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="⚙",  # Settings gear
+                text="⚙",
                 callback_data=f"ADMIN Settings|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="⏩",  # Seek forward 20s
+                text="⏩",
                 callback_data=f"ADMIN SeekFwd|{chat_id}",
             ),
         ]
@@ -105,7 +105,7 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
     rows.append(
         [
             InlineKeyboardButton(
-                text=f"≡ {queue_count}",  # Queue symbol + count
+                text=f"≡ {queue_count}",
                 callback_data=f"GetQueued g|{videoid}",
             )
         ]
@@ -116,7 +116,7 @@ def _player_markup(_, chat_id, playing=True, played=None, dur=None):
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="✕",  # Cross symbol for close
+                    text="✕",
                     callback_data=f"forceclose {videoid}|{user_id}",
                 )
             ]
