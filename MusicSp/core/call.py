@@ -339,16 +339,26 @@ class Call(PyTgCalls):
             title = current_track.get("title", "")
             current_vidid = current_track.get("vidid", "")
             if not title:
+                LOGGER(__name__).warning("[AUTOPLAY] No title in current track")
                 return False
 
             # Try different search indexes to find a DIFFERENT song
             for idx in [1, 2, 3, 4, 0, 5]:
                 try:
                     result = await YouTube.slider(title, idx)
-                    if not result or len(result) < 4:
+                    if (
+                        not result
+                        or not isinstance(result, (list, tuple))
+                        or len(result) < 4
+                    ):
                         continue
+
                     t, d_min, _thumb, vid_id = result
-                    if not vid_id or vid_id == current_vidid:
+
+                    # Validate vid_id
+                    if not vid_id or not isinstance(vid_id, str) or len(vid_id) < 5:
+                        continue
+                    if vid_id == current_vidid:
                         continue
 
                     await put_queue(
@@ -362,18 +372,23 @@ class Call(PyTgCalls):
                         current_track.get("user_id"),
                         "audio",
                     )
-                    # Preserve autoplay flag on the new track
-                    if db.get(chat_id):
-                        db[chat_id][0]["autoplay"] = True
+
+                    # Preserve autoplay flag on the newly added track
+                    if db.get(chat_id) and len(db[chat_id]) > 0:
+                        db[chat_id][-1]["autoplay"] = True
+
                     LOGGER(__name__).info(
                         f"[AUTOPLAY] Added similar song: {t} ({vid_id})"
                     )
                     return True
-                except Exception:
+                except Exception as e:
+                    LOGGER(__name__).warning(
+                        f"[AUTOPLAY] idx={idx} failed: {e}"
+                    )
                     continue
             return False
         except Exception as e:
-            LOGGER(__name__).error(f"[AUTOPLAY] error: {e}")
+            LOGGER(__name__).error(f"[AUTOPLAY] fatal error: {e}")
             return False
 
     async def change_stream(self, client, chat_id):
@@ -398,7 +413,6 @@ class Call(PyTgCalls):
                 await set_loop(chat_id, loop)
 
             # --- AUTOPLAY LOGIC ---
-            # If queue is now empty but autoplay was ON, fetch a similar song
             if not db.get(chat_id):
                 autoplay_on = bool(
                     popped_track and popped_track.get("autoplay")
@@ -406,6 +420,9 @@ class Call(PyTgCalls):
                 if autoplay_on:
                     fetched = await self._autoplay_fetch(chat_id, popped_track)
                     if not fetched:
+                        LOGGER(__name__).warning(
+                            f"[AUTOPLAY] No similar song found for chat {chat_id}"
+                        )
                         await _clear_(chat_id)
                         return await client.leave_group_call(chat_id)
                 else:
@@ -425,7 +442,25 @@ class Call(PyTgCalls):
             except Exception:
                 return
 
-        queued = db[chat_id][0]["file"]
+        # Safety check: queue might be empty or file might be None
+        if not db.get(chat_id):
+            await _clear_(chat_id)
+            return await client.leave_group_call(chat_id)
+
+        queued = db[chat_id][0].get("file")
+        if not queued:
+            LOGGER(__name__).error(
+                f"[change_stream] queued file is None/empty for chat {chat_id}, skipping"
+            )
+            try:
+                db[chat_id].pop(0)
+            except Exception:
+                pass
+            if db.get(chat_id):
+                return await self.change_stream(client, chat_id)
+            await _clear_(chat_id)
+            return await client.leave_group_call(chat_id)
+
         language = await get_lang(chat_id)
         _ = get_string(language)
         title = (db[chat_id][0]["title"]).title()
@@ -444,7 +479,7 @@ class Call(PyTgCalls):
 
         video = True if str(streamtype) == "video" else False
 
-        # Baki ka change stream logic same rakhiye
+        # --- LIVE TRACK ---
         if "live_" in queued:
             n, link = await YouTube.video(videoid, True)
             if n == 0:
@@ -470,8 +505,10 @@ class Call(PyTgCalls):
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "tg"
 
+        # --- VIDEO / YOUTUBE DOWNLOAD TRACK ---
         elif "vid_" in queued:
             mystic = await app.send_message(original_chat_id, _["call_7"])
+            file_path = None
             try:
                 file_path, direct = await YouTube.download(
                     videoid,
@@ -479,18 +516,54 @@ class Call(PyTgCalls):
                     videoid=True,
                     video=True if str(streamtype) == "video" else False,
                 )
-            except Exception:
-                return await mystic.edit_text(
-                    _["call_6"], disable_web_page_preview=True
+            except Exception as e:
+                LOGGER(__name__).error(
+                    f"[change_stream] download error for {videoid}: {e}"
                 )
+
+            # BUG FIX: Check if download actually succeeded
+            if not file_path:
+                LOGGER(__name__).error(
+                    f"[change_stream] download returned None for {videoid}"
+                )
+                try:
+                    await mystic.edit_text(
+                        _["call_6"], disable_web_page_preview=True
+                    )
+                except Exception:
+                    pass
+
+                # Pop the bad track
+                try:
+                    db[chat_id].pop(0)
+                except Exception:
+                    pass
+
+                # Try next track in queue
+                if db.get(chat_id):
+                    return await self.change_stream(client, chat_id)
+
+                # If queue is empty and autoplay was on, try fetching another
+                if popped_track and popped_track.get("autoplay"):
+                    fetched = await self._autoplay_fetch(chat_id, popped_track)
+                    if fetched:
+                        return await self.change_stream(client, chat_id)
+
+                await _clear_(chat_id)
+                return await client.leave_group_call(chat_id)
+
             stream = _video_stream(file_path, hq_video=True) if video else _audio_stream(file_path)
             try:
                 await client.change_stream(chat_id, stream)
-            except Exception:
+            except Exception as e:
+                LOGGER(__name__).error(f"[change_stream] change_stream error: {e}")
                 return await app.send_message(original_chat_id, text=_["call_6"])
             img = await gen_thumb(videoid)
             button = stream_markup(_, chat_id)
-            await mystic.delete()
+            try:
+                await mystic.delete()
+            except Exception:
+                pass
             run = await app.send_photo(
                 chat_id=original_chat_id,
                 photo=img,
@@ -505,6 +578,7 @@ class Call(PyTgCalls):
             db[chat_id][0]["mystic"] = run
             db[chat_id][0]["markup"] = "stream"
 
+        # --- TELEGRAM / SOUNDCLOUD / DIRECT FILE ---
         else:
             stream = _video_stream(queued, hq_video=True) if video else _audio_stream(queued)
             try:
@@ -614,7 +688,7 @@ class Call(PyTgCalls):
                 return
 
             LOGGER(__name__).warning(f"[on_left] VERIFYING chat={chat_id}")
-            await asyncio.sleep(2)  # Wait to ensure it wasn't a false flag
+            await asyncio.sleep(2)
 
             if db.get(chat_id):
                 LOGGER(__name__).warning(
