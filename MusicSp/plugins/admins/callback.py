@@ -40,6 +40,11 @@ from config import (
 from strings import get_string
 import config
 
+# Import the new helper functions
+from MusicSp.plugins.admins.seek import perform_seek
+from MusicSp.plugins.admins.speed import perform_speed_change
+from MusicSp.utils.inline.play import _settings_markup
+
 checker = {}
 upvoters = {}
 
@@ -58,6 +63,7 @@ async def del_back_playlist(client, CallbackQuery, _):
     if not await is_active_chat(chat_id):
         return await CallbackQuery.answer(_["general_5"], show_alert=True)
     mention = CallbackQuery.from_user.mention
+
     if command == "UpVote":
         if chat_id not in votemode:
             votemode[chat_id] = {}
@@ -136,7 +142,39 @@ async def del_back_playlist(client, CallbackQuery, _):
                         return await CallbackQuery.answer(
                             _["admin_14"], show_alert=True
                         )
-    if command == "Pause":
+
+    # --- NEW CALLBACKS LOGIC ---
+    if command == "SeekBack":
+        await perform_seek(chat_id, 20, backward=True, mention=mention, callback_query=CallbackQuery)
+    elif command == "SeekFwd":
+        await perform_seek(chat_id, 20, backward=False, mention=mention, callback_query=CallbackQuery)
+    elif command == "Settings":
+        await CallbackQuery.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(_settings_markup(_, chat_id))
+        )
+        await CallbackQuery.answer()
+    elif command == "SettingsBack":
+        await CallbackQuery.message.delete()
+        await CallbackQuery.message.reply_text(
+            "ᴘʟᴀʏᴇʀ ᴍᴇɴᴜ ʀᴇsᴛᴏʀᴇᴅ", reply_markup=InlineKeyboardMarkup(stream_markup(_, chat_id))
+        )
+    elif command == "ToggleSlow":
+        await perform_speed_change(chat_id, "slow", mention, CallbackQuery)
+    elif command == "ToggleSped":
+        await perform_speed_change(chat_id, "sped", mention, CallbackQuery)
+    elif command == "ToggleAutoplay":
+        playing = db.get(chat_id)
+        if playing:
+            current = playing[0].get("autoplay", False)
+            playing[0]["autoplay"] = not current
+            status = "ᴏɴ" if not current else "ᴏғғ"
+            await CallbackQuery.answer(f"ᴀᴜᴛᴏᴘʟᴀʏ : {status}", show_alert=True)
+            await CallbackQuery.message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup(_settings_markup(_, chat_id))
+            )
+    # --- END NEW CALLBACKS ---
+
+    elif command == "Pause":
         if not await is_music_playing(chat_id):
             return await CallbackQuery.answer(_["admin_1"], show_alert=True)
         await CallbackQuery.answer()
