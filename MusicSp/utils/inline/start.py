@@ -21,7 +21,7 @@ def start_panel(_):
             ),
             InlineKeyboardButton(
                 text=_["S_B_2"], url=config.SUPPORT_GROUP,
-                style=ButtonStyle.SUCCESS,
+                style=ButtonStyle.PRIMARY,
             ),
         ],
     ]
@@ -41,7 +41,7 @@ def private_panel(_):
             InlineKeyboardButton(
                 text=_["S_B_4"], 
                 callback_data="settings_back_helper",
-                style=ButtonStyle.DANGER,
+                style=ButtonStyle.PRIMARY,
             )
         ],
         [
@@ -60,7 +60,7 @@ def private_panel(_):
             InlineKeyboardButton(
                 text=_["S_B_2"], 
                 url=config.SUPPORT_GROUP,
-                style=ButtonStyle.SUCCESS,
+                style=ButtonStyle.PRIMARY,
             ),
         ],
     ]
