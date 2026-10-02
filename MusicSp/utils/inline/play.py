@@ -1,5 +1,4 @@
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from pyrogram import types
 
 from MusicSp.misc import db
 from MusicSp.utils.formatters import time_to_seconds, seconds_to_min
@@ -41,54 +40,117 @@ def _progress_bar(played, dur, width=13):
 
 def _player_markup(_, chat_id, playing=True, played=None, dur=None):
     current = db.get(chat_id) or []
+    track = current[0] if current else {}
 
-    if current:
-        track = current[0]
-        if played is None:
-            played = seconds_to_min(track.get("played", 0))
-        if dur is None:
-            dur = track.get("dur")
+    if played is None:
+        played = seconds_to_min(track.get("played", 0))
+    if dur is None:
+        dur = track.get("dur")
+
+    user_id = track.get("user_id", "")
+    videoid = track.get("vidid", "")
 
     rows = []
 
+    # 1. Progress Bar
     bar = _progress_bar(played, dur) if played is not None and dur else None
     if bar:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{played}  {bar}  {dur}",
+                    text=f"{played} {bar} {dur}",
                     callback_data="GetTimer",
                 )
             ]
         )
 
+    # 2. Main Controls (Replay, Pause/Resume, Skip) -> Symbols only
     rows.append(
         [
             InlineKeyboardButton(
-                text="↶ Replay",
+                text="⟲",  # Replay symbol
                 callback_data=f"ADMIN Replay|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="Ⅱ Pause" if playing else "Resume",
+                text="⏸" if playing else "⏵",  # Pause / Play symbol
                 callback_data=f"ADMIN {'Pause' if playing else 'Resume'}|{chat_id}",
             ),
             InlineKeyboardButton(
-                text="» Skip",
+                text="⏭",  # Skip symbol
                 callback_data=f"ADMIN Skip|{chat_id}",
             ),
         ]
     )
 
-    queue_count = max(0, len(current) - 1)
-    videoid = current[0].get("vidid", "") if current else ""
+    # 3. New Row: 20s Back, Settings, 20s Forward -> Symbols only
     rows.append(
         [
             InlineKeyboardButton(
-                text=f"≡ Queue • {queue_count}",
+                text="⏪",  # Seek backward 20s
+                callback_data=f"ADMIN SeekBack|{chat_id}",
+            ),
+            InlineKeyboardButton(
+                text="⚙",  # Settings gear
+                callback_data=f"ADMIN Settings|{chat_id}",
+            ),
+            InlineKeyboardButton(
+                text="⏩",  # Seek forward 20s
+                callback_data=f"ADMIN SeekFwd|{chat_id}",
+            ),
+        ]
+    )
+
+    # 4. Queue Button
+    queue_count = max(0, len(current) - 1)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=f"≡ {queue_count}",  # Queue symbol + count
                 callback_data=f"GetQueued g|{videoid}",
             )
         ]
     )
+
+    # 5. Close Button
+    if user_id:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✕",  # Cross symbol for close
+                    callback_data=f"forceclose {videoid}|{user_id}",
+                )
+            ]
+        )
+
+    return rows
+
+
+def _settings_markup(_, chat_id):
+    """Settings Sub-Menu with Slowed, Sped Up, Autoplay, and Back buttons."""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="Slowed Reverb",
+                callback_data=f"ADMIN ToggleSlow|{chat_id}",
+            ),
+            InlineKeyboardButton(
+                text="Sped Up",
+                callback_data=f"ADMIN ToggleSped|{chat_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="Autoplay",
+                callback_data=f"ADMIN ToggleAutoplay|{chat_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="↩ Back",
+                callback_data=f"ADMIN SettingsBack|{chat_id}",
+            )
+        ],
+    ]
     return rows
 
 
@@ -100,37 +162,6 @@ def stream_markup(_, chat_id, playing=True):
     return _player_markup(_, chat_id, playing=playing)
 
 
-def _convert_to_rich_buttons(buttons):
-    """Standard InlineKeyboardButton -> Native RichMessageButtons."""
-    rich_rows = []
-    for row in buttons:
-        rich_buttons = []
-        for btn in row:
-            if btn.callback_data:
-                if btn.callback_data == "GetTimer":
-                    continue
-                rich_buttons.append(
-                    types.RichMessageButton(
-                        text=types.RichTextPlain(text=btn.text),
-                        callback_data=btn.callback_data,
-                        style="primary",
-                    )
-                )
-            elif btn.url:
-                rich_buttons.append(
-                    types.RichMessageButton(
-                        text=types.RichTextPlain(text=btn.text),
-                        url=btn.url,
-                        style="primary",
-                    )
-                )
-        if rich_buttons:
-            rich_rows.append(
-                types.InputRichBlockButtons(buttons=rich_buttons, align="center")
-            )
-    return rich_rows
-
-
 async def refresh_player_markup(_, chat_id, playing=True):
     current = db.get(chat_id) or []
     if not current:
@@ -139,47 +170,8 @@ async def refresh_player_markup(_, chat_id, playing=True):
     if not mystic:
         return
 
-    track = current[0]
-    played = seconds_to_min(track.get("played", 0))
-    dur = track.get("dur", "00:00")
-
     try:
         buttons = stream_markup(_, chat_id, playing=playing)
-
-        # 1. Rich message update path
-        if hasattr(mystic, "edit_rich_message"):
-            try:
-                rich_button_rows = _convert_to_rich_buttons(buttons)
-                saved_photo = track.get("photo")
-                saved_caption = track.get("caption")
-
-                new_blocks = []
-                if saved_photo and saved_caption:
-                    new_blocks.append(
-                        types.InputRichBlockPhoto(
-                            photo=saved_photo,
-                            caption=types.RichTextPlain(text=saved_caption),
-                        )
-                    )
-
-                bar = _progress_bar(played, dur)
-                new_blocks.append(
-                    types.InputRichBlockProgressBar(
-                        progress=0,
-                        text=types.RichTextPlain(text=f"{played}  {bar}  {dur}"),
-                    )
-                )
-
-                new_blocks.extend(rich_button_rows)
-
-                await mystic.edit_rich_message(
-                    rich_message=types.InputRichMessage(blocks=new_blocks)
-                )
-                return
-            except Exception as rich_err:
-                print(f"Rich edit failed, falling back: {rich_err}")
-
-        # 2. Fallback
         await mystic.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup(buttons)
         )
