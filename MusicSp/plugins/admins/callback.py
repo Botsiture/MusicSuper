@@ -144,24 +144,41 @@ async def del_back_playlist(client, CallbackQuery, _):
                         )
 
     # --- NEW CALLBACKS LOGIC ---
-    if command == "SeekBack":
+    if command == "End":
+        await CallbackQuery.answer("Stream Ended!")
+        await DevSp.stop_stream(chat_id)
+        await set_loop(chat_id, 0)
+        db.pop(chat_id, None)
+        await CallbackQuery.message.delete()
+        
+    elif command == "SeekBack":
         await perform_seek(chat_id, 20, backward=True, mention=mention, callback_query=CallbackQuery)
+        
     elif command == "SeekFwd":
         await perform_seek(chat_id, 20, backward=False, mention=mention, callback_query=CallbackQuery)
+        
     elif command == "Settings":
+        if db.get(chat_id):
+            db[chat_id][0]["in_settings"] = True
         await CallbackQuery.message.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup(_settings_markup(_, chat_id))
         )
         await CallbackQuery.answer()
+        
     elif command == "SettingsBack":
-        await CallbackQuery.message.delete()
-        await CallbackQuery.message.reply_text(
-            "ᴘʟᴀʏᴇʀ ᴍᴇɴᴜ ʀᴇsᴛᴏʀᴇᴅ", reply_markup=InlineKeyboardMarkup(stream_markup(_, chat_id))
+        if db.get(chat_id):
+            db[chat_id][0]["in_settings"] = False
+        await CallbackQuery.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(stream_markup(_, chat_id))
         )
+        await CallbackQuery.answer()
+        
     elif command == "ToggleSlow":
         await perform_speed_change(chat_id, "slow", mention, CallbackQuery)
+        
     elif command == "ToggleSped":
         await perform_speed_change(chat_id, "sped", mention, CallbackQuery)
+        
     elif command == "ToggleAutoplay":
         playing = db.get(chat_id)
         if playing:
@@ -423,18 +440,30 @@ async def markup_timer():
                     _ = get_string(language)
                 except:
                     _ = get_string("en")
+                
+                # --- YAHAN LOGIC CHANGE HUA HAI ---
                 try:
-                    buttons = stream_markup_timer(
-                        _,
-                        chat_id,
-                        seconds_to_min(playing[0]["played"]),
-                        playing[0]["dur"],
-                    )
+                    if playing[0].get("in_settings"):
+                        buttons = _settings_markup(
+                            _,
+                            chat_id,
+                            seconds_to_min(playing[0]["played"]),
+                            playing[0]["dur"],
+                        )
+                    else:
+                        buttons = stream_markup_timer(
+                            _,
+                            chat_id,
+                            seconds_to_min(playing[0]["played"]),
+                            playing[0]["dur"],
+                        )
                     await mystic.edit_reply_markup(
                         reply_markup=InlineKeyboardMarkup(buttons)
                     )
                 except:
                     continue
+                # --- LOGIC END ---
+                
             except:
                 continue
 
