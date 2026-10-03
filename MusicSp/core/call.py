@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import re
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -55,11 +56,9 @@ counter = {}
 _recently_joined: dict = {}
 _RECENT_JOIN_GRACE = 15
 
-# Autoplay: per-chat failed vidids
+# Autoplay trackers
 _autoplay_failed: dict = {}
 _AUTOPLAY_MAX_ATTEMPTS = 5
-
-# Autoplay: per-chat history (vidids, titles, thumbnails) to avoid duplicates
 _played_history: dict = {}
 
 SMOOTH_FFMPEG = "-nostdin"
@@ -67,6 +66,15 @@ SMOOTH_FFMPEG = "-nostdin"
 HQ_AUDIO = HighQualityAudio()
 HQ_VIDEO = HighQualityVideo()
 MQ_VIDEO = MediumQualityVideo()
+
+# Useless words that YouTube puts in different uploads of the same song
+_STOPWORDS = {
+    "full", "video", "lyrical", "lyrics", "official", "audio", "song", "hd",
+    "4k", "music", "movie", "film", "ft", "feat", "featuring", "remix", "version",
+    "lofi", "slowed", "reverb", "cover", "live", "from", "the", "and", "with",
+    "prod", "by", "new", "latest", "hit", "superhit", "bollywood", "hindi",
+    "punjabi", "t-series", "tseries", "sony", "zee", "music", "video"
+}
 
 
 def _file_ok(path) -> bool:
@@ -90,6 +98,35 @@ def _clear_played_history(chat_id):
         _played_history.pop(chat_id, None)
     except Exception:
         pass
+
+
+def _clean_title(title: str) -> str:
+    """Clean a title by removing brackets, punctuation, and stopwords."""
+    if not title:
+        return ""
+    # Lowercase and remove text in brackets/parentheses
+    t = title.lower()
+    t = re.sub(r"\(.*?\)|\[.*?\]", " ", t)
+    # Keep only alphanumeric and spaces
+    t = re.sub(r"[^a-z0-9\s]", " ", t)
+    words = t.split()
+    # Filter out stopwords
+    words = [w for w in words if w not in _STOPWORDS and len(w) > 1]
+    return " ".join(words)
+
+
+def _is_similar_title(t1: str, t2: str, threshold: float = 0.4) -> bool:
+    """Check if two cleaned titles are similar using Jaccard similarity."""
+    if not t1 or not t2:
+        return False
+    w1 = set(t1.split())
+    w2 = set(t2.split())
+    if not w1 or not w2:
+        return False
+    intersection = w1.intersection(w2)
+    union = w1.union(w2)
+    similarity = len(intersection) / len(union)
+    return similarity >= threshold
 
 
 def _audio_stream(file_path, extra_ffmpeg=None):
@@ -342,7 +379,6 @@ class Call(PyTgCalls):
                 )
                 raise AssistantErr(f"Join failed: {e}")
 
-        # Reset all trackers for the new session
         _clear_autoplay_failed(chat_id)
         _clear_played_history(chat_id)
 
@@ -361,13 +397,8 @@ class Call(PyTgCalls):
 
     async def _autoplay_fetch(self, chat_id, current_track):
         """
-        Autoplay: Search a similar song on YouTube and add it to the queue.
-        Skips:
-          - songs whose vid_id already played in this session
-          - songs whose title already played in this session
-          - songs whose thumbnail already played in this session
-          - songs whose vid_id already failed to download
-        Returns True if a similar song was successfully added.
+        Autoplay: Search similar songs, filter out duplicates using fuzzy matching,
+        and add a random valid one to the queue.
         """
         try:
             title = current_track.get("title", "")
@@ -377,17 +408,18 @@ class Call(PyTgCalls):
                 return False
 
             failed = _autoplay_failed.setdefault(chat_id, set())
-            played = _played_history.setdefault(chat_id, {"vid": set(), "titles": set(), "thumbs": set()})
-            
-            # Add current track to played history immediately
+            played = _played_history.setdefault(chat_id, {"vid": set(), "titles": set()})
+
+            # Add current track to history immediately
             if current_vidid:
                 played["vid"].add(current_vidid)
-            if title:
-                played["titles"].add(title.lower().strip())
+            clean_current = _clean_title(title)
+            if clean_current:
+                played["titles"].add(clean_current)
 
-            # Build multiple search terms for variety
+            # Build multiple search terms
             search_terms = [title]
-            words = title.split()
+            words = clean_current.split()
             if len(words) > 3:
                 search_terms.append(" ".join(words[:3]))
                 search_terms.append(" ".join(words[-3:]))
@@ -402,76 +434,73 @@ class Call(PyTgCalls):
                     seen_terms.add(t)
                     unique_terms.append(t)
 
+            # Collect all valid candidates from multiple indexes
+            candidates = []
             for term in unique_terms:
-                for idx in [1, 2, 3, 4, 5, 6, 7, 8, 0, 9]:
+                for idx in range(0, 10):
                     try:
                         result = await YouTube.slider(term, idx)
-                        if (
-                            not result
-                            or not isinstance(result, (list, tuple))
-                            or len(result) < 4
-                        ):
+                        if not result or not isinstance(result, (list, tuple)) or len(result) < 4:
                             continue
-
                         t, d_min, thumb, vid_id = result
 
-                        # Validate vid_id
                         if not vid_id or not isinstance(vid_id, str) or len(vid_id) < 5:
                             continue
-
-                        # Skip if same as current
                         if vid_id == current_vidid:
                             continue
-
-                        # Skip if already played by vid_id
                         if vid_id in played["vid"]:
                             continue
-
-                        # Skip if already played by exact title
-                        if t.lower().strip() in played["titles"]:
-                            LOGGER(__name__).info(f"[AUTOPLAY] Skipping duplicate title: {t}")
-                            continue
-                            
-                        # Skip if already played by thumbnail
-                        if thumb and thumb in played["thumbs"]:
-                            LOGGER(__name__).info(f"[AUTOPLAY] Skipping duplicate thumbnail for: {t}")
-                            continue
-
-                        # Skip if already failed
                         if vid_id in failed:
                             continue
 
-                        # Add to history to prevent future duplicate fetches
-                        played["vid"].add(vid_id)
-                        played["titles"].add(t.lower().strip())
-                        if thumb:
-                            played["thumbs"].add(thumb)
+                        clean_t = _clean_title(t)
+                        if not clean_t:
+                            continue
 
-                        await put_queue(
-                            chat_id,
-                            chat_id,
-                            f"vid_{vid_id}",
-                            t,
-                            d_min,
-                            current_track.get("by", "Autoplay"),
-                            vid_id,
-                            current_track.get("user_id"),
-                            "audio",
-                        )
+                        # Check fuzzy similarity against all played titles
+                        is_duplicate = False
+                        for played_title in played["titles"]:
+                            if _is_similar_title(clean_t, played_title, threshold=0.4):
+                                is_duplicate = True
+                                break
+                        if is_duplicate:
+                            LOGGER(__name__).info(f"[AUTOPLAY] Filtered out duplicate: {t}")
+                            continue
 
-                        if db.get(chat_id) and len(db[chat_id]) > 0:
-                            db[chat_id][-1]["autoplay"] = True
-
-                        LOGGER(__name__).info(
-                            f"[AUTOPLAY] Queued similar song: {t} ({vid_id})"
-                        )
-                        return True
+                        candidates.append((t, d_min, vid_id, clean_t))
                     except Exception as e:
-                        LOGGER(__name__).warning(
-                            f"[AUTOPLAY] term='{term}' idx={idx} failed: {e}"
-                        )
                         continue
-            return False
+
+            if not candidates:
+                LOGGER(__name__).warning("[AUTOPLAY] No valid candidates found after filtering.")
+                return False
+
+            # Pick a RANDOM candidate to avoid sequential "aage-piche" behavior
+            chosen = random.choice(candidates)
+            t, d_min, vid_id, clean_t = chosen
+
+            # Add chosen to history BEFORE queuing
+            played["vid"].add(vid_id)
+            played["titles"].add(clean_t)
+
+            await put_queue(
+                chat_id,
+                chat_id,
+                f"vid_{vid_id}",
+                t,
+                d_min,
+                current_track.get("by", "Autoplay"),
+                vid_id,
+                current_track.get("user_id"),
+                "audio",
+            )
+
+            if db.get(chat_id) and len(db[chat_id]) > 0:
+                db[chat_id][-1]["autoplay"] = True
+
+            LOGGER(__name__).info(f"[AUTOPLAY] Queued random similar song: {t} ({vid_id})")
+            return True
+
         except Exception as e:
             LOGGER(__name__).error(f"[AUTOPLAY] fatal error: {e}")
             return False
@@ -499,15 +528,11 @@ class Call(PyTgCalls):
 
             # --- AUTOPLAY LOGIC ---
             if not db.get(chat_id):
-                autoplay_on = bool(
-                    popped_track and popped_track.get("autoplay")
-                )
+                autoplay_on = bool(popped_track and popped_track.get("autoplay"))
                 if autoplay_on:
                     fetched = await self._autoplay_fetch(chat_id, popped_track)
                     if not fetched:
-                        LOGGER(__name__).warning(
-                            f"[AUTOPLAY] No similar song found for chat {chat_id}"
-                        )
+                        LOGGER(__name__).warning(f"[AUTOPLAY] No similar song found for chat {chat_id}")
                         await _clear_(chat_id)
                         _clear_autoplay_failed(chat_id)
                         _clear_played_history(chat_id)
@@ -540,9 +565,7 @@ class Call(PyTgCalls):
 
         queued = db[chat_id][0].get("file")
         if not queued:
-            LOGGER(__name__).error(
-                f"[change_stream] queued file is None/empty for chat {chat_id}, skipping"
-            )
+            LOGGER(__name__).error(f"[change_stream] queued file is None/empty for chat {chat_id}, skipping")
             try:
                 db[chat_id].pop(0)
             except Exception:
@@ -581,12 +604,13 @@ class Call(PyTgCalls):
                 await client.change_stream(chat_id, stream)
             except Exception:
                 return await app.send_message(original_chat_id, text=_["call_6"])
-            
-            # Track history
-            hist = _played_history.setdefault(chat_id, {"vid": set(), "titles": set(), "thumbs": set()})
+
+            hist = _played_history.setdefault(chat_id, {"vid": set(), "titles": set()})
             if videoid: hist["vid"].add(videoid)
-            if title: hist["titles"].add(title.lower().strip())
-            
+            if title:
+                clean_t = _clean_title(title)
+                if clean_t: hist["titles"].add(clean_t)
+
             img = await gen_thumb(videoid)
             button = stream_markup(_, chat_id)
             run = await app.send_photo(
@@ -607,9 +631,7 @@ class Call(PyTgCalls):
             if status_msg:
                 mystic = status_msg
                 try:
-                    await mystic.edit_text(
-                        _["call_7"], disable_web_page_preview=True
-                    )
+                    await mystic.edit_text(_["call_7"], disable_web_page_preview=True)
                 except Exception:
                     pass
             else:
@@ -624,22 +646,14 @@ class Call(PyTgCalls):
                     video=True if str(streamtype) == "video" else False,
                 )
             except Exception as e:
-                LOGGER(__name__).error(
-                    f"[change_stream] download exception for {videoid}: {e}"
-                )
+                LOGGER(__name__).error(f"[change_stream] download exception for {videoid}: {e}")
 
             if not file_path:
-                LOGGER(__name__).error(
-                    f"[change_stream] download returned None for {videoid}"
-                )
-
+                LOGGER(__name__).error(f"[change_stream] download returned None for {videoid}")
                 _autoplay_failed.setdefault(chat_id, set()).add(videoid)
 
                 try:
-                    await mystic.edit_text(
-                        "❌ ᴅᴏᴡɴʟᴏᴀᴅ ғᴀɪʟᴇᴅ, ᴛʀʏɪɴɢ ᴀɴᴏᴛʜᴇʀ ᴛʀᴀᴄᴋ...",
-                        disable_web_page_preview=True,
-                    )
+                    await mystic.edit_text("❌ ᴅᴏᴡɴʟᴏᴀᴅ ғᴀɪʟᴇᴅ, ᴛʀʏɪɴɢ ᴀɴᴏᴛʜᴇʀ ᴛʀᴀᴄᴋ...", disable_web_page_preview=True)
                 except Exception:
                     pass
 
@@ -649,27 +663,17 @@ class Call(PyTgCalls):
                     pass
 
                 if db.get(chat_id):
-                    return await self.change_stream(
-                        client, chat_id, status_msg=mystic
-                    )
+                    return await self.change_stream(client, chat_id, status_msg=mystic)
 
                 if popped_track and popped_track.get("autoplay"):
                     for attempt in range(_AUTOPLAY_MAX_ATTEMPTS):
                         fetched = await self._autoplay_fetch(chat_id, popped_track)
                         if fetched:
-                            return await self.change_stream(
-                                client, chat_id, status_msg=mystic
-                            )
-                        LOGGER(__name__).info(
-                            f"[AUTOPLAY] Attempt {attempt + 1}/{_AUTOPLAY_MAX_ATTEMPTS} "
-                            f"failed to find new track for chat {chat_id}"
-                        )
+                            return await self.change_stream(client, chat_id, status_msg=mystic)
+                        LOGGER(__name__).info(f"[AUTOPLAY] Attempt {attempt + 1}/{_AUTOPLAY_MAX_ATTEMPTS} failed to find new track for chat {chat_id}")
 
                 try:
-                    await mystic.edit_text(
-                        "❌ ᴀʟʟ sɪᴍɪʟᴀʀ ᴛʀᴀᴄᴋs ғᴀɪʟᴇᴅ ᴛᴏ ᴅᴏᴡɴʟᴏᴀᴅ. sᴛᴏᴘᴘɪɴɢ ᴀᴜᴛᴏᴘʟᴀʏ.",
-                        disable_web_page_preview=True,
-                    )
+                    await mystic.edit_text("❌ ᴀʟʟ sɪᴍɪʟᴀʀ ᴛʀᴀᴄᴋs ғᴀɪʟᴇᴅ ᴛᴏ ᴅᴏᴡɴʟᴏᴀᴅ. sᴛᴏᴘᴘɪɴɢ ᴀᴜᴛᴏᴘʟᴀʏ.", disable_web_page_preview=True)
                 except Exception:
                     pass
 
@@ -685,11 +689,12 @@ class Call(PyTgCalls):
                 LOGGER(__name__).error(f"[change_stream] change_stream error: {e}")
                 return await app.send_message(original_chat_id, text=_["call_6"])
 
-            # Track history on success
-            hist = _played_history.setdefault(chat_id, {"vid": set(), "titles": set(), "thumbs": set()})
+            hist = _played_history.setdefault(chat_id, {"vid": set(), "titles": set()})
             if videoid: hist["vid"].add(videoid)
-            if title: hist["titles"].add(title.lower().strip())
-            
+            if title:
+                clean_t = _clean_title(title)
+                if clean_t: hist["titles"].add(clean_t)
+
             _clear_autoplay_failed(chat_id)
 
             img = await gen_thumb(videoid)
@@ -719,31 +724,28 @@ class Call(PyTgCalls):
             except Exception:
                 return await app.send_message(original_chat_id, text=_["call_6"])
 
-            hist = _played_history.setdefault(chat_id, {"vid": set(), "titles": set(), "thumbs": set()})
+            hist = _played_history.setdefault(chat_id, {"vid": set(), "titles": set()})
             if videoid and videoid not in ["telegram", "soundcloud"]:
                 hist["vid"].add(videoid)
-            if title: hist["titles"].add(title.lower().strip())
+            if title:
+                clean_t = _clean_title(title)
+                if clean_t: hist["titles"].add(clean_t)
+
             _clear_autoplay_failed(chat_id)
 
             button = stream_markup(_, chat_id)
             if videoid == "telegram":
                 run = await app.send_photo(
                     chat_id=original_chat_id,
-                    photo=config.TELEGRAM_AUDIO_URL
-                    if str(streamtype) == "audio"
-                    else config.TELEGRAM_VIDEO_URL,
-                    caption=_["stream_1"].format(
-                        config.SUPPORT_GROUP, title[:23], db[chat_id][0]["dur"], user
-                    ),
+                    photo=config.TELEGRAM_AUDIO_URL if str(streamtype) == "audio" else config.TELEGRAM_VIDEO_URL,
+                    caption=_["stream_1"].format(config.SUPPORT_GROUP, title[:23], db[chat_id][0]["dur"], user),
                     reply_markup=InlineKeyboardMarkup(button),
                 )
             elif videoid == "soundcloud":
                 run = await app.send_photo(
                     chat_id=original_chat_id,
                     photo=config.SOUNCLOUD_IMG_URL,
-                    caption=_["stream_1"].format(
-                        config.SUPPORT_GROUP, title[:23], db[chat_id][0]["dur"], user
-                    ),
+                    caption=_["stream_1"].format(config.SUPPORT_GROUP, title[:23], db[chat_id][0]["dur"], user),
                     reply_markup=InlineKeyboardMarkup(button),
                 )
             else:
@@ -760,36 +762,24 @@ class Call(PyTgCalls):
                     reply_markup=InlineKeyboardMarkup(button),
                 )
             db[chat_id][0]["mystic"] = run
-            db[chat_id][0]["markup"] = (
-                "tg" if videoid in ["telegram", "soundcloud"] else "stream"
-            )
+            db[chat_id][0]["markup"] = "tg" if videoid in ["telegram", "soundcloud"] else "stream"
 
     async def ping(self):
         pings = []
-        if config.STRING1:
-            pings.append(await self.one.ping)
-        if config.STRING2:
-            pings.append(await self.two.ping)
-        if config.STRING3:
-            pings.append(await self.three.ping)
-        if config.STRING4:
-            pings.append(await self.four.ping)
-        if config.STRING5:
-            pings.append(await self.five.ping)
+        if config.STRING1: pings.append(await self.one.ping)
+        if config.STRING2: pings.append(await self.two.ping)
+        if config.STRING3: pings.append(await self.three.ping)
+        if config.STRING4: pings.append(await self.four.ping)
+        if config.STRING5: pings.append(await self.five.ping)
         return str(round(sum(pings) / len(pings), 3)) if pings else "0"
 
     async def start(self):
         LOGGER(__name__).info("Starting PyTgCalls Client...\n")
-        if config.STRING1:
-            await self.one.start()
-        if config.STRING2:
-            await self.two.start()
-        if config.STRING3:
-            await self.three.start()
-        if config.STRING4:
-            await self.four.start()
-        if config.STRING5:
-            await self.five.start()
+        if config.STRING1: await self.one.start()
+        if config.STRING2: await self.two.start()
+        if config.STRING3: await self.three.start()
+        if config.STRING4: await self.four.start()
+        if config.STRING5: await self.five.start()
 
     async def decorators(self):
         @self.one.on_kicked()
@@ -822,18 +812,14 @@ class Call(PyTgCalls):
             elapsed = time.time() - joined_at if joined_at else 999
 
             if joined_at and elapsed < _RECENT_JOIN_GRACE:
-                LOGGER(__name__).info(
-                    f"[on_left] IGNORED (grace {elapsed:.1f}s) chat={chat_id}"
-                )
+                LOGGER(__name__).info(f"[on_left] IGNORED (grace {elapsed:.1f}s) chat={chat_id}")
                 return
 
             LOGGER(__name__).warning(f"[on_left] VERIFYING chat={chat_id}")
             await asyncio.sleep(2)
 
             if db.get(chat_id):
-                LOGGER(__name__).warning(
-                    f"[on_left] Queue exists, ignoring false leave signal chat={chat_id}"
-                )
+                LOGGER(__name__).warning(f"[on_left] Queue exists, ignoring false leave signal chat={chat_id}")
                 return
 
             _recently_joined.pop(chat_id, None)
@@ -857,17 +843,13 @@ class Call(PyTgCalls):
             joined_at = _recently_joined.get(chat_id, 0)
             elapsed = time.time() - joined_at if joined_at else 999
             if joined_at and elapsed < _RECENT_JOIN_GRACE:
-                LOGGER(__name__).warning(
-                    f"[stream_end] IGNORED (grace {elapsed:.1f}s) chat={chat_id}"
-                )
+                LOGGER(__name__).warning(f"[stream_end] IGNORED (grace {elapsed:.1f}s) chat={chat_id}")
                 return
 
             await asyncio.sleep(1)
 
             if not db.get(chat_id):
-                LOGGER(__name__).warning(
-                    f"[stream_end] db empty chat={chat_id} → leaving"
-                )
+                LOGGER(__name__).warning(f"[stream_end] db empty chat={chat_id} → leaving")
                 try:
                     await _clear_(chat_id)
                     _clear_autoplay_failed(chat_id)
@@ -878,9 +860,7 @@ class Call(PyTgCalls):
             try:
                 await self.change_stream(client, chat_id)
             except Exception as e:
-                LOGGER(__name__).error(
-                    f"[stream_end] change_stream error: {e}\n{traceback.format_exc()}"
-                )
+                LOGGER(__name__).error(f"[stream_end] change_stream error: {e}\n{traceback.format_exc()}")
 
 
 DevSp = Call()
