@@ -55,11 +55,11 @@ counter = {}
 _recently_joined: dict = {}
 _RECENT_JOIN_GRACE = 15
 
-# Autoplay: per-chat failed vidids (to avoid infinite retry of the same song)
+# Autoplay: per-chat failed vidids
 _autoplay_failed: dict = {}
 _AUTOPLAY_MAX_ATTEMPTS = 5
 
-# Autoplay: per-chat history of played vidids & titles (to avoid replaying same song)
+# Autoplay: per-chat history (vidids, titles, thumbnails) to avoid duplicates
 _played_history: dict = {}
 
 SMOOTH_FFMPEG = "-nostdin"
@@ -364,7 +364,8 @@ class Call(PyTgCalls):
         Autoplay: Search a similar song on YouTube and add it to the queue.
         Skips:
           - songs whose vid_id already played in this session
-          - songs whose title exactly matches the current track
+          - songs whose title already played in this session
+          - songs whose thumbnail already played in this session
           - songs whose vid_id already failed to download
         Returns True if a similar song was successfully added.
         """
@@ -376,8 +377,13 @@ class Call(PyTgCalls):
                 return False
 
             failed = _autoplay_failed.setdefault(chat_id, set())
-            played = _played_history.setdefault(chat_id, set())
-            current_title_norm = title.lower().strip()
+            played = _played_history.setdefault(chat_id, {"vid": set(), "titles": set(), "thumbs": set()})
+            
+            # Add current track to played history immediately
+            if current_vidid:
+                played["vid"].add(current_vidid)
+            if title:
+                played["titles"].add(title.lower().strip())
 
             # Build multiple search terms for variety
             search_terms = [title]
@@ -407,7 +413,7 @@ class Call(PyTgCalls):
                         ):
                             continue
 
-                        t, d_min, _thumb, vid_id = result
+                        t, d_min, thumb, vid_id = result
 
                         # Validate vid_id
                         if not vid_id or not isinstance(vid_id, str) or len(vid_id) < 5:
@@ -417,20 +423,29 @@ class Call(PyTgCalls):
                         if vid_id == current_vidid:
                             continue
 
-                        # Skip if already played in this session
-                        if vid_id in played:
+                        # Skip if already played by vid_id
+                        if vid_id in played["vid"]:
+                            continue
+
+                        # Skip if already played by exact title
+                        if t.lower().strip() in played["titles"]:
+                            LOGGER(__name__).info(f"[AUTOPLAY] Skipping duplicate title: {t}")
+                            continue
+                            
+                        # Skip if already played by thumbnail
+                        if thumb and thumb in played["thumbs"]:
+                            LOGGER(__name__).info(f"[AUTOPLAY] Skipping duplicate thumbnail for: {t}")
                             continue
 
                         # Skip if already failed
                         if vid_id in failed:
                             continue
 
-                        # Skip if title is exactly the same as current track
-                        if t.lower().strip() == current_title_norm:
-                            LOGGER(__name__).info(
-                                f"[AUTOPLAY] Skipping same-title track: {t}"
-                            )
-                            continue
+                        # Add to history to prevent future duplicate fetches
+                        played["vid"].add(vid_id)
+                        played["titles"].add(t.lower().strip())
+                        if thumb:
+                            played["thumbs"].add(thumb)
 
                         await put_queue(
                             chat_id,
@@ -568,7 +583,9 @@ class Call(PyTgCalls):
                 return await app.send_message(original_chat_id, text=_["call_6"])
             
             # Track history
-            _played_history.setdefault(chat_id, set()).add(videoid)
+            hist = _played_history.setdefault(chat_id, {"vid": set(), "titles": set(), "thumbs": set()})
+            if videoid: hist["vid"].add(videoid)
+            if title: hist["titles"].add(title.lower().strip())
             
             img = await gen_thumb(videoid)
             button = stream_markup(_, chat_id)
@@ -669,8 +686,10 @@ class Call(PyTgCalls):
                 return await app.send_message(original_chat_id, text=_["call_6"])
 
             # Track history on success
-            if videoid:
-                _played_history.setdefault(chat_id, set()).add(videoid)
+            hist = _played_history.setdefault(chat_id, {"vid": set(), "titles": set(), "thumbs": set()})
+            if videoid: hist["vid"].add(videoid)
+            if title: hist["titles"].add(title.lower().strip())
+            
             _clear_autoplay_failed(chat_id)
 
             img = await gen_thumb(videoid)
@@ -700,8 +719,10 @@ class Call(PyTgCalls):
             except Exception:
                 return await app.send_message(original_chat_id, text=_["call_6"])
 
+            hist = _played_history.setdefault(chat_id, {"vid": set(), "titles": set(), "thumbs": set()})
             if videoid and videoid not in ["telegram", "soundcloud"]:
-                _played_history.setdefault(chat_id, set()).add(videoid)
+                hist["vid"].add(videoid)
+            if title: hist["titles"].add(title.lower().strip())
             _clear_autoplay_failed(chat_id)
 
             button = stream_markup(_, chat_id)
