@@ -1,13 +1,18 @@
 import os
 import sys
 
-# ✅ 0. Fix GitPython on Heroku: runtime par `git` executable available nahi hota.
-#    Ye env var `import git` se PEHLE set hona chahiye, warna process crash karega.
+# ✅ 0. GitPython fix (Heroku par `git` runtime par nahi hota)
 os.environ.setdefault("GIT_PYTHON_REFRESH", "quiet")
+
+# ✅ 0.1 Node.js fix (pytgcalls ke liye zaroori)
+#      `nodejs-bin[cmd]` Node.js ko Python ke bin folder mein install karta hai.
+#      Us folder ko PATH mein sabse aage daal rahe hain, taaki `node` mil jaye.
+_venv_bin = os.path.dirname(sys.executable)
+os.environ["PATH"] = _venv_bin + os.pathsep + os.environ.get("PATH", "")
 
 import asyncio
 
-# ✅ 1. Install uvloop (if available) BEFORE setting the event loop
+# ✅ 1. uvloop install (if available) BEFORE setting event loop
 if sys.platform != "win32":
     try:
         import uvloop
@@ -15,7 +20,7 @@ if sys.platform != "win32":
     except Exception:
         pass
 
-# ✅ 2. Create and set an active event loop in MainThread for PyTgCalls sync compatibility
+# ✅ 2. Create and set active event loop for PyTgCalls sync compatibility
 try:
     loop = asyncio.get_event_loop()
 except RuntimeError:
@@ -26,7 +31,7 @@ else:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-# ✅ 3. Ensure pytgcalls is importable across all environments (Heroku, VPS, Containers)
+# ✅ 3. Ensure pytgcalls importable (fallback)
 try:
     import pytgcalls
 except ModuleNotFoundError:
@@ -40,7 +45,7 @@ except ModuleNotFoundError:
     except Exception:
         pass
 
-# ✅ 4. Apply PyTgCalls MTProto compatibility patches
+# ✅ 4. PyTgCalls MTProto compatibility patches
 import MusicSp.core.patch
 
 # --- Original bot imports ---
