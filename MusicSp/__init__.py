@@ -5,10 +5,18 @@ import sys
 os.environ.setdefault("GIT_PYTHON_REFRESH", "quiet")
 
 # ✅ 0.1 Node.js fix (pytgcalls ke liye zaroori)
-#      `nodejs-bin[cmd]` Node.js ko Python ke bin folder mein install karta hai.
-#      Us folder ko PATH mein sabse aage daal rahe hain, taaki `node` mil jaye.
 _venv_bin = os.path.dirname(sys.executable)
 os.environ["PATH"] = _venv_bin + os.pathsep + os.environ.get("PATH", "")
+
+# ✅ 0.2 FFmpeg fix (pytgcalls ko ffmpeg + ffprobe chahiye)
+try:
+    import static_ffmpeg
+    # Ye line ffmpeg aur ffprobe binaries ko PATH mein add kar deti hai.
+    # Agar pehle se available hain to skip kar deti hai (weak=True).
+    static_ffmpeg.add_paths(weak=True)
+except Exception:
+    # Agar static-ffmpeg fail ho jaye to bhi bot crash na ho
+    pass
 
 import asyncio
 
