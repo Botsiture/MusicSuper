@@ -1,8 +1,23 @@
 #!/bin/bash
-if [ -f ".venv/bin/python" ]; then
+
+# --- GitPython fix: Heroku ke naye stack par `git` runtime par available nahi hota ---
+# Ye Python process shuru hone se PEHLE set hona chahiye, warna `import git` crash karega.
+export GIT_PYTHON_REFRESH=quiet
+
+# --- Python output unbuffered (logs turant dikhein) ---
+export PYTHONUNBUFFERED=1
+
+# --- Safer shell behaviour ---
+set -e
+
+# --- Pick the right Python interpreter ---
+if [ -x ".venv/bin/python" ]; then
     exec .venv/bin/python -m MusicSp
-elif [ -f "venv/bin/python" ]; then
+elif [ -x "venv/bin/python" ]; then
     exec venv/bin/python -m MusicSp
-else
+elif command -v python3 >/dev/null 2>&1; then
     exec python3 -m MusicSp
+else
+    echo "[start] ERROR: No Python interpreter found (.venv, venv, or python3)." >&2
+    exit 1
 fi
